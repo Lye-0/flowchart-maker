@@ -87,7 +87,8 @@ class Builder {
   knownLibrary(name: string) {
     const groups: Record<string, string[]> = {
       'stdio.h': ['printf', 'puts', 'putchar', 'scanf', 'getchar', 'fgets', 'fputs', 'fprintf', 'fscanf', 'fread', 'fwrite', 'fopen', 'fclose', 'sprintf', 'snprintf', 'sscanf', 'fgetc', 'fputc', 'feof', 'fflush'],
-      'stdlib.h': ['rand', 'srand', 'malloc', 'calloc', 'realloc', 'free', 'atoi', 'atof', 'abs'],
+      'stdlib.h': ['rand', 'srand', 'random', 'srandom', 'malloc', 'calloc', 'realloc', 'free', 'atoi', 'atof', 'abs'],
+      'time.h': ['time'],
       'math.h': ['sqrt', 'pow', 'sin', 'cos', 'tan', 'floor', 'ceil', 'fabs'],
       'string.h': ['strlen', 'strcmp', 'strcpy', 'strncpy', 'memcpy', 'memset', 'strcat'],
     };
@@ -216,7 +217,7 @@ export function convertTree(root: SyntaxNode, source: string): Conversion {
     if (n.type === 'function_definition') functions.add(functionName(n));
     if (n.type === 'preproc_include') {
       const match = n.text.match(/<([^>]+)>/);
-      if (match && ['stdio.h', 'stdlib.h', 'math.h', 'string.h', 'stddef.h', 'stdint.h', 'limits.h', 'float.h'].includes(match[1])) headers.add(match[1]);
+      if (match && ['stdio.h', 'stdlib.h', 'math.h', 'string.h', 'stddef.h', 'stdint.h', 'limits.h', 'float.h', 'time.h'].includes(match[1])) headers.add(match[1]);
       else blocked = '内容を確認できないヘッダーが含まれています。マクロによる構文変更を否定できないため、関数本体を空白にしました。展開済みのCコードを入力してください。';
     }
     if (n.type.startsWith('preproc_') && !['preproc_include', 'preproc_def', 'preproc_function_def'].includes(n.type)) blocked = '条件付きコンパイル・プリプロセッサ命令の影響を確定できません。展開済みのCコードを入力してください。';

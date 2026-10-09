@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { Parser, Language } from 'web-tree-sitter';
 import { resolve } from 'node:path';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { convertTree } from '../src/engine/convert';
 import { toDrawio } from '../src/engine/drawio';
 import { stencil } from '../src/engine/shapes';
@@ -19,6 +19,39 @@ function convert(code: string) {
   try { return convertTree(tree.rootNode, code); } finally { tree.delete(); }
 }
 describe('Cからの制御フロー', () => {
+  it('報告された乱数と標準入出力のコードを空白なしで接続する', () => {
+    const source = readFileSync('tests/fixtures/random-input.c', 'utf8');
+    const r = convert(source), p = r.pages[0];
+    expect(r.diagnostics).toEqual([]);
+    expect(p.nodes.some(n => n.kind === 'unknown')).toBe(false);
+    expect(p.nodes.filter(n => n.kind === 'display')).toHaveLength(3);
+    expect(p.nodes.filter(n => n.kind === 'input')).toHaveLength(1);
+    expect(p.nodes.find(n => n.label === 'srandom(time(NULL))')?.kind).toBe('subroutine');
+    expect(p.nodes.find(n => n.label === 'num = random() % 128 + 1')?.kind).toBe('process');
+    let current = p.nodes.find(n => n.label === '開始')!;
+    const visited = new Set([current.id]);
+    while (current.label !== '終了') {
+      const next = p.edges.filter(e => e.source === current.id);
+      expect(next).toHaveLength(1);
+      current = p.nodes.find(n => n.id === next[0].target)!;
+      expect(visited.has(current.id)).toBe(false); visited.add(current.id);
+    }
+    expect(visited.size).toBe(p.nodes.length);
+    expect(toDrawio(r)).not.toContain('status="unresolved"');
+  });
+  it('time.hを認識し、timeの直接呼び出しを変換する', () => {
+    expect(convert('#include <time.h>\nint main(){time(0);return 0;}').diagnostics).toEqual([]);
+  });
+  it('random/srandomはstdlib.hがある場合に認識する', () => {
+    expect(convert('#include <stdlib.h>\nint main(){srandom(1);int n=random();return n;}').diagnostics).toEqual([]);
+    expect(convert('int main(){srandom(1);return random();}').diagnostics).toHaveLength(2);
+  });
+  it('新しい既知関数もマクロ・シャドーイング・未知の引数を推測しない', () => {
+    expect(convert('#include <time.h>\n#define time(x) custom(x)\nint main(){time(0);}').diagnostics).toHaveLength(1);
+    expect(convert('#include <stdlib.h>\nint f(int (*random)(void)){return random();}').diagnostics).toHaveLength(1);
+    expect(convert('#include <stdlib.h>\nint main(){srandom(mystery());}').diagnostics).toHaveLength(1);
+    expect(convert('int main(){return time(0);}').diagnostics).toHaveLength(1);
+  });
   it('サンプルは実際のC文法で解析できる', () => {
     for (const sample of samples) { const result = convert(sample.code); expect(result.pages.length).toBeGreaterThan(0); if (sample.file !== 'unresolved.c') expect(result.diagnostics).toEqual([]); }
   });
