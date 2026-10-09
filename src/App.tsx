@@ -108,7 +108,7 @@ export default function App() {
             {page ? <div className={dirty ? s.stale : ''}><Diagram page={page} zoom={zoom} selected={selected} onSelect={selectNode} /></div> : <div className={s.emptyState}><Icon name="chart" size={40} /><p>{busy ? 'コードの流れを読み取っています' : 'コードを入力して「変換する」を押してください。'}</p></div>}
           </div>
           <div className={s.previewBottom}><span>{dirty ? 'コードが変更されています。再変換してください。' : page ? '図形を選択すると、元のコードを確認できます。' : '変換したフローチャートがここに表示されます。'}</span><div className={s.zoomControls}><button aria-label="縮小" disabled={!page} onClick={() => setZoom(z => Math.max(.2, z - .1))}>−</button><output aria-label="ズーム倍率">{Math.round(zoom * 100)}%</output><button aria-label="拡大" disabled={!page} onClick={() => setZoom(z => Math.min(1.8, z + .1))}>＋</button><button aria-label="幅に合わせる" disabled={!page} onClick={() => page && setZoom(Math.min(1, Math.max(.2, ((canvas.current?.clientWidth ?? 600) - 48) / page.width)))}><Icon name="expand" size={15} /></button></div></div>
-          <div className={s.exportBar}><div><strong>編集のつづきは、draw.ioで。</strong><span>図形・テキスト・接続線を個別に編集できます。</span></div><button className={s.downloadButton} disabled={!result || dirty || busy || !!error} onClick={download}><Icon name="download" size={17} />.drawio を保存</button></div>
+          <div className={s.exportBar}><div><strong>編集のつづきは、<a className={s.editorLink} href="https://app.diagrams.net/" target="_blank" rel="noopener noreferrer" aria-label="draw.io（別タブで開く）">draw.io</a>で。</strong><span>図形・テキスト・接続線を個別に編集できます。</span></div><button className={s.downloadButton} disabled={!result || dirty || busy || !!error} onClick={download}><Icon name="download" size={17} />.drawio を保存</button></div>
         </section>
       </div>
 
