@@ -10,7 +10,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:browser": "node scripts/smoke.mjs",
-    "test:drawio": "node scripts/drawio-smoke.mjs"
+    "test:drawio": "node scripts/drawio-smoke.mjs",
+    "check:dist": "node scripts/check-dist.mjs",
+    "test:pages": "node scripts/pages-smoke.mjs"
   },
   "dependencies": {
     "react": "^19.2.0",

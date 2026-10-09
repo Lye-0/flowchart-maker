@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { samples } from '../tests/fixtures/samples.ts';
 
 await mkdir('test-results', { recursive: true });
-const browser = await chromium.launch({ channel: 'msedge', headless: true });
+const channel = process.env.BROWSER_CHANNEL || (process.platform === 'win32' ? 'msedge' : undefined);
+const browser = await chromium.launch({ channel, headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1100 }, deviceScaleFactor: 1 });
   const errors = [], external = [];

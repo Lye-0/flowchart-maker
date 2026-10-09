@@ -20,7 +20,44 @@ npm run build
 npm run preview
 ```
 
-`dist/` が静的配信の成果物です。配信先では `/flowchart-maker/` に配置してください。ルート配信に変更する場合は `vite.config.ts` の `base` を変更して再ビルドします。サーバー側処理・DB・環境変数は不要です。
+`dist/` が静的配信の成果物です。配信先では `/flowchart-maker/` に配置してください。配信パスはビルド時の `PAGES_BASE_PATH` で変更でき、未指定時は `/flowchart-maker/` です。サーバー側処理やDBは不要です。
+
+## GitHub Pagesへのデプロイ
+
+リポジトリ: https://github.com/Lye-0/flowchart-maker
+
+通常の公開先: https://lye-0.github.io/flowchart-maker/
+
+1. GitHubのリポジトリで **Settings → Pages → Build and deployment → Source → GitHub Actions** を選択します。
+2. この設定を含む変更を `main` にpushします。
+3. **Actions → Deploy to GitHub Pages** の完了を確認します。手動で開始する場合は **Run workflow** を使います。
+
+`.github/workflows/pages.yml` が、mise.tomlと同じNode.jsで `npm ci` → テスト → ビルド → 配信ファイル検査 → ChromiumでWorker/WASMを含む動作確認 → Pages公開を実行します。途中で失敗した場合はデプロイしません。デプロイにはGitHub標準のGITHUB_TOKENを使い、追加のシークレットは不要です。
+
+Pagesの設定からbase_pathを取得するため、リポジトリのサブパスと独自ドメインのルート配信に対応します。独自ドメインはGitHubのPages設定で別途設定してください。デプロイ対象は **dist/だけ**です。`.private-reference/`、`.verification-report/`、テスト結果、Cソースの検証資料は公開しません。
+
+### ローカルで公開構成を確認する
+
+```sh
+npm run build
+npm run check:dist
+npm run test:pages
+```
+
+Windowsではインストール済みEdgeを使用し、LinuxのCIではPlaywrightのChromiumを使用します。Linux/macOSで実行する場合は先に `npx playwright install chromium` を実行してください。必要に応じて `BROWSER_CHANNEL` でブラウザを指定できます。
+
+ルート配信をPowerShellで検証する場合:
+
+```powershell
+$env:PAGES_BASE_PATH = '/'
+npm run build
+npm run test:pages
+Remove-Item Env:PAGES_BASE_PATH
+# 通常のローカル構成に戻す
+npm run build
+```
+
+公式手順: https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages
 
 ## 操作
 
@@ -69,7 +106,7 @@ npm run test:drawio
 
 `test:drawio` は先に `npm test` と `test:browser` で保存したサンプル図を使用します。ネットワークが必要です。生成サンプルを公式埋め込みエディタに渡し、読み込み・9種類の記号の描画・ラベル編集・移動・再保存を確認します。通常のアプリ動作にはこの通信はありません。
 
-検証ログと画像はGit対象外の `test-results/` に生成します。公開・デプロイは行っていません。
+検証ログと画像はGit対象外の `test-results/` に生成します。GitHub Pagesにはこれらの検証ファイルを含めません。
 
 ## 非公開の参考資料
 
