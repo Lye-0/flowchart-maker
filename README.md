@@ -1,75 +1,17 @@
 # Flowchart Maker
 
-Cプログラムを、diagrams.netで編集できるフローチャートに変換するブラウザアプリです。URLパスは `/flowchart-maker/`。
+Cプログラムを、diagrams.netで編集できるフローチャートに変換するブラウザアプリ。
 
-## 開発
 
-Node.jsは `mise.toml` の24.21.0、パッケージ管理はnpmを使用します。
+## DEPLOYMENT
 
-```sh
-mise install
-npm ci
-npm run dev
-```
 
-表示されるローカルURL（通常 `http://127.0.0.1:5173/flowchart-maker/`）を開きます。
 
-```sh
-npm test
-npm run build
-npm run preview
-```
+<details>
+<summary>以下開発用</summary>
 
-`dist/` が静的配信の成果物です。配信先では `/flowchart-maker/` に配置してください。配信パスはビルド時の `PAGES_BASE_PATH` で変更でき、未指定時は `/flowchart-maker/` です。サーバー側処理やDBは不要です。
 
-## GitHub Pagesへのデプロイ
-
-リポジトリ: https://github.com/Lye-0/flowchart-maker
-
-通常の公開先: https://lye-0.github.io/flowchart-maker/
-
-1. GitHubのリポジトリで **Settings → Pages → Build and deployment → Source → GitHub Actions** を選択します。
-2. この設定を含む変更を `main` にpushします。
-3. **Actions → Deploy to GitHub Pages** の完了を確認します。手動で開始する場合は **Run workflow** を使います。
-
-`.github/workflows/pages.yml` が、mise.tomlと同じNode.jsで `npm ci` → テスト → ビルド → 配信ファイル検査 → ChromiumでWorker/WASMを含む動作確認 → Pages公開を実行します。途中で失敗した場合はデプロイしません。デプロイにはGitHub標準のGITHUB_TOKENを使い、追加のシークレットは不要です。
-
-Pagesの設定からbase_pathを取得するため、リポジトリのサブパスと独自ドメインのルート配信に対応します。独自ドメインはGitHubのPages設定で別途設定してください。デプロイ対象は **dist/だけ**です。`.private-reference/`、`.verification-report/`、テスト結果、Cソースの検証資料は公開しません。
-
-### ローカルで公開構成を確認する
-
-```sh
-npm run build
-npm run check:dist
-npm run test:pages
-```
-
-Windowsではインストール済みEdgeを使用し、LinuxのCIではPlaywrightのChromiumを使用します。Linux/macOSで実行する場合は先に `npx playwright install chromium` を実行してください。必要に応じて `BROWSER_CHANNEL` でブラウザを指定できます。
-
-ルート配信をPowerShellで検証する場合:
-
-```powershell
-$env:PAGES_BASE_PATH = '/'
-npm run build
-npm run test:pages
-Remove-Item Env:PAGES_BASE_PATH
-# 通常のローカル構成に戻す
-npm run build
-```
-
-公式手順: https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages
-
-## 操作
-
-1. UTF-8の `.c` ファイルを読み込む、ドラッグ＆ドロップする、またはコードを貼り付けます。
-2. 「変換する」（Ctrl / Cmd + Enter）で図を生成します。
-3. 関数タブでページを切り替え、図形を選択すると元コードを確認できます。
-4. 未解決箇所を確認し、「.drawio を保存」で全ページを保存します。
-5. https://app.diagrams.net/ でファイルを開き、編集を続けます。
-
-コードを変更した後は再変換まで保存を無効にします。コードは外部送信・自動保存されません。初期表示は空欄です。直接入力、または「ファイルを選択」から入力を開始します。
-
-## 構成
+### 構成
 
 - React / TypeScript / Vite、CSS Modules。
 - Web Worker内のTree-sitter C（WASM）で構文解析。
@@ -79,7 +21,7 @@ npm run build
 - `src/engine/drawio.ts`：非圧縮mxfile XML。図形は自己完結したカスタムステンシル、矢印はsource/targetで接続。
 - 要約した図形には、対応する文のコードと行範囲をデータとして保持します。未解析のヘッダーなどの注意事項もXMLに保存します。出力ファイルには対応するコードが含まれるため、共有する際は内容を確認してください。
 
-## 対応範囲と前提
+### 対応範囲と前提
 
 関数単位の処理、宣言・代入、if/else、for/while/do-while、break/continue/return、確認できる直接呼び出しに対応します。複雑な式は原式のまま保持し、目的を推測しません。単純な未初期化宣言は図にせず、初期化や副作用のある宣言（VLAなど）は保持します。隣接する単純代入をまとめ、乱数の初期化と同系列の生成・代入、入力案内と読み取りをそれぞれ1図形にします。分岐・ループ・入出力・未解決文を越えて処理を統合しません。main末尾の通常のreturn 0は終了端子に統合し、早期returnや値を計算するreturnは残します。
 
@@ -91,30 +33,12 @@ switch/goto、未知の呼び出し、マクロ使用、関数ポインタ、構
 
 入力上限100,000文字、1関数あたり最大1,200図形、解析タイムアウト20秒。キャンセル時はWorkerを終了します。
 
-## 検証
 
-`npm test` は実際のC文法WASMを使い、分岐、入れ子ループ、continueの更新式、早期return、空白、接続、XMLエスケープを検証します。
-
-ローカルサーバーを起動した状態で、インストール済みMicrosoft Edgeを使ったヘッドレステストを実行できます。
-
-```sh
-npm run test:browser
-npm run test:drawio
-```
-
-`test:browser` は入力→Worker→プレビュー→ファイル保存と、外部通信がないこと、モバイル幅を検証します。URLは環境変数 `APP_URL` で変更できます。
-
-`test:drawio` は先に `npm test` と `test:browser` で保存したサンプル図を使用します。ネットワークが必要です。生成サンプルを公式埋め込みエディタに渡し、読み込み・9種類の記号の描画・ラベル編集・移動・再保存を確認します。通常のアプリ動作にはこの通信はありません。
-
-検証ログと画像はGit対象外の `test-results/` に生成します。GitHub Pagesにはこれらの検証ファイルを含めません。
-
-## 非公開の参考資料
-
-ユーザー提供の画像は `.private-reference/` にまとめています。フォルダ全体を `.gitignore` に指定し、ソースから参照せず、ビルド成果物にも含めません。`public/` には配置しないでください。
-
-## 仕様資料
+### 仕様資料
 
 - https://github.com/jgraph/drawio/wiki/File-Format
 - https://www.drawio.com/docs/reference/embed-mode/
 - https://github.com/tree-sitter/tree-sitter-c
 - https://github.com/tree-sitter/tree-sitter/tree/master/lib/binding_web
+
+</details>
