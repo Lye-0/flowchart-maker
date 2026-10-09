@@ -37,7 +37,7 @@ try {
   assert(await save.isDisabled());
   await page.getByRole('button', { name: '変換する', exact: true }).click();
   await page.getByText('変換済み', { exact: true }).waitFor(); assert(await save.isEnabled());
-  await page.getByRole('group', { name: 'main のフローチャート' }).getByRole('button', { name: /n を1増やす/ }).click();
+  await page.getByRole('group', { name: 'main のフローチャート' }).getByRole('button', { name: /nを1増やす/ }).click();
   assert.equal(await editor.evaluate(el => el.value.slice(el.selectionStart, el.selectionEnd)), 'n++;');
   await editor.fill(samples[3].code);
   await page.getByRole('button', { name: '変換する', exact: true }).click();

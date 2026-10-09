@@ -117,7 +117,7 @@ export default function App() {
 
       <section className={s.diagnostics} aria-labelledby="issues-title">
         <button className={s.diagnosticsToggle} onClick={() => setShowIssues(v => !v)} aria-expanded={showIssues} aria-controls="issue-list"><span className={s.issueIndicator}>{result ? result.diagnostics.length ? '!' : '✓' : '—'}</span><h2 id="issues-title">未解決の箇所</h2><span className={s.issueCount}>{result ? result.diagnostics.length : '—'}</span><span className={s.issueDescription}>{dirty ? '前回の変換結果です' : result?.diagnostics.length ? '空白の図形を確認してください' : '確定できない処理は、空白で残します'}</span><span className={s.disclosure}>{showIssues ? '−' : '＋'}</span></button>
-        {showIssues && <div id="issue-list" className={s.issueList}>{result?.diagnostics.length ? <><p>接続を確定できない箇所の後は、図が分かれています。元のコードを確認し、draw.ioで補ってください。</p>{result.diagnostics.map(d => <button key={d.id} disabled={dirty} onClick={() => { const index = result.pages.findIndex(p => p.name === d.page); if (index >= 0) setPageIndex(index); focusSource(d.range, d.nodeId); }}><span>{d.page} · {d.range.line}–{d.range.endLine} 行</span><span>{d.message}</span><Icon name="arrow" size={16} /></button>)}</> : <p>{result ? '対応範囲内で、未解決として検出された箇所はありません。Cプログラムの正しさを保証するものではありません。' : '変換すると、確認が必要な箇所がここに表示されます。'}</p>}</div>}
+        {showIssues && <div id="issue-list" className={s.issueList}>{result?.diagnostics.length ? <><p>確認が必要な範囲と理由を表示します。元のコードを確認し、必要な箇所をdraw.ioで補ってください。</p>{result.diagnostics.map(d => <button key={d.id} disabled={dirty} onClick={() => { const index = result.pages.findIndex(p => p.name === d.page); if (index >= 0) setPageIndex(index); focusSource(d.range, d.nodeId); }}><span>{d.page} · {d.range.line}–{d.range.endLine} 行</span><span>{d.message}</span><Icon name="arrow" size={16} /></button>)}</> : <p>{result ? '対応範囲内で、未解決として検出された箇所はありません。Cプログラムの正しさを保証するものではありません。' : '変換すると、確認が必要な箇所がここに表示されます。'}</p>}</div>}
       </section>
       <footer className={s.footer}><span><Icon name="shield" size={15} />コードは外部に送信されません。</span><span>C source <span className={s.footerArrow}>→</span> Editable flowchart</span></footer>
     </main>
@@ -125,9 +125,9 @@ export default function App() {
     <dialog ref={help} className={s.helpDialog} onClick={e => { if (e.target === help.current) help.current.close(); }}><div className={s.dialogHeader}><h2>Flowchart Maker の使い方</h2><button aria-label="使い方を閉じる" onClick={() => help.current?.close()}><Icon name="close" /></button></div><div className={s.dialogContent}>
       <ol><li>Cコードを貼り付けるか、UTF-8の .c ファイルを読み込みます。</li><li>「変換する」を押し、図と未解決箇所を確認します。</li><li>「.drawio を保存」で全関数をダウンロードします。</li><li><a href="https://app.diagrams.net/" target="_blank" rel="noreferrer">diagrams.net</a> の「ファイル → ファイルを開く → デバイス」からファイルを開きます。</li></ol>
       <h3>変換できる範囲</h3><p>関数ごとの処理、代入、if / else、for / while / do while、break / continue / return、定義・宣言を確認できる直接の関数呼び出しに対応します。図の処理順序はCコードに基づきます。</p>
-      <h3>空白になる処理</h3><p>マクロの使用、条件付きコンパイル、switch、goto、関数ポインタ、構文エラーなどは空白で残します。接続を確定できない場合は後続への線を描きません。行番号と理由は未解決箇所一覧と、出力図形のデータに残ります。</p>
+      <h3>空白になる処理</h3><p>マクロの使用、条件付きコンパイル、switch、goto、関数ポインタ、構文エラーなどは空白で残します。未知のヘッダーだけで関数全体を空白にはしません。未解析の条件はラベルを空白にして本体の処理を保持し、実行の継続を確定できない文からは後続への線を描きません。行番号と理由は未解決箇所一覧と、出力図形のデータに残ります。</p>
       <h3>解析の前提</h3><p>プログラムの実行やコンパイルは行いません。図は関数本体を対象とし、グローバル変数の初期化や型の整合性は検証しません。標準ヘッダーの既知の関数を認識し、標準入出力はキーボード・画面として表現します。外部での入出力リダイレクトは解析対象外です。</p>
-      <p>未知の処理目的を推測せず、複雑な式は元の表記で残します。終了端子は常に置きますが、終了経路がない箇所からは接続しません。</p>
+      <p>図は処理の意味ごとにまとめます。実行を伴わない単純な宣言は省き、乱数の準備・代入や入力案内・読み取りはまとめて表示します。図形を選ぶと対応する元コードを確認できます。未知の目的は推測せず、複雑な式は原式を保持します。終了端子は常に置きますが、終了経路がない箇所からは接続しません。</p>
       <h3>プライバシー</h3><p>入力コードはブラウザ内だけで処理され、自動保存されません。ページを閉じる前に必要なコードと図を保存してください。</p>
     </div></dialog>
   </div>;

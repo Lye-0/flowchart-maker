@@ -1,4 +1,5 @@
 import type { Node as SyntaxNode } from 'web-tree-sitter';
+import { summarize, condition, simpleDeclaration, containsCall, type Meaning } from './semantic';
 import type { Conversion, Diagnostic, FlowEdge, FlowNode, FlowPage, Shape, SourceRange } from './types';
 
 const WIDTH = 240;
@@ -57,7 +58,7 @@ class Builder {
     if (this.count >= 1200) throw new Error('図形が多すぎます。関数やコードを分割して変換してください。');
     const lines = wrapLabel(label, kind === 'decision' ? 22 : 26);
     const h = kind === 'junction' ? 2 : Math.max(kind === 'decision' ? 112 : 64, lines.length * 20 + (kind === 'decision' ? 58 : 28));
-    const node: FlowNode = { id: `n${++this.count}`, kind, label, x, y, w: kind === 'junction' ? 2 : WIDTH, h, range: source ? range(source) : undefined };
+    const node: FlowNode = { id: `n${++this.count}`, kind, label, x, y, w: kind === 'junction' ? 2 : WIDTH, h, range: source ? range(source) : undefined, sourceText: source?.text };
     this.nodes.push(node); return node;
   }
   edge(source: string, target: string, extra: Partial<FlowEdge> = {}) {
@@ -69,6 +70,57 @@ class Builder {
     this.diagnostics.push({ id: `d${this.diagnostics.length + 1}`, message, range: range(source), nodeId: node.id, page: this.name });
     // Control effects are unknown. Never invent a fall-through connection.
     return { tails: [] as Tail[], y: y + node.h + GAP };
+  }
+  isBuiltin = (name: string) => this.knownLibrary(name) && !this.functions.has(name) && !this.macros.has(name) && !this.shadowed.has(name);
+  diagnose(node: FlowNode, source: SyntaxNode, message: string) {
+    node.label = ''; node.unresolved = true;
+    this.diagnostics.push({ id: 'd' + (this.diagnostics.length + 1), message, range: range(source), nodeId: node.id, page: this.name });
+  }
+  renderMeaning(meaning: Meaning, sources: SyntaxNode[], x: number, y: number, tails: Tail[]) {
+    const n = this.add(meaning.kind, meaning.label, x, y, sources[0]);
+    const last = sources[sources.length - 1];
+    n.range = { ...range(sources[0]), end: last.endIndex, endLine: last.endPosition.row + 1 };
+    n.sourceText = sources.map(s => s.text).join('\n'); this.connect(tails, n);
+    return { tails: [{ id: n.id }], y: y + n.h + GAP };
+  }
+  sequence(block: SyntaxNode, x: number, y: number, tails: Tail[], loop?: LoopContext) {
+    const statements = children(block);
+    for (let i = 0; i < statements.length; i++) {
+      const child = statements[i];
+      const safe = !child.hasError && !this.unsafe(child);
+      if (safe && simpleDeclaration(child)) continue;
+      // Only omit a final, side-effect-free normal return, never an early return.
+      if (safe && i === statements.length - 1 && block.parent?.type === 'function_definition' && child.type === 'return_statement' &&
+        (child.text.trim() === 'return;' || (this.name === 'main' && /^return\s+0\s*;$/.test(child.text.trim())))) {
+        this.end.range = range(child); this.end.sourceText = child.text; continue;
+      }
+      if (safe && ['declaration', 'expression_statement'].includes(child.type)) {
+        let meaning = summarize(child, this.isBuiltin);
+        const sources = [child];
+        // Combine only adjacent tasks within the same block. Never cross control flow or uncertain code.
+        let j = i + 1;
+        const skipped: SyntaxNode[] = [];
+        while (j < statements.length && simpleDeclaration(statements[j]) && !statements[j].hasError && !this.unsafe(statements[j])) { skipped.push(statements[j]); j++; }
+        const next = statements[j];
+        if (next && !next.hasError && !this.unsafe(next) && ['declaration', 'expression_statement'].includes(next.type)) {
+          const other = summarize(next, this.isBuiltin);
+          if (meaning.seed && other.random === meaning.seed) {
+            meaning = { kind: 'process', label: '乱数を初期化し、\n' + other.label };
+            sources.push(...skipped, next); i = j;
+          } else if (meaning.prompt && other.input) {
+            meaning = { kind: 'input', label: '「' + meaning.prompt + '」と表示し\n' + other.label };
+            sources.push(...skipped, next); i = j;
+          } else if (meaning.merge && other.merge && !skipped.length && !containsCall(child) && !containsCall(next)) {
+            meaning = { kind: 'process', label: meaning.label + '\n' + other.label };
+            sources.push(next); i = j;
+          }
+        }
+        const result = this.renderMeaning(meaning, sources, x, y, tails); tails = result.tails; y = result.y;
+      } else {
+        const result = this.statement(child, x, y, tails, loop); tails = result.tails; y = result.y;
+      }
+    }
+    return { tails, y };
   }
   unsafe(node: SyntaxNode): string | null {
     let reason: string | null = null;
@@ -97,18 +149,16 @@ class Builder {
   statement(node: SyntaxNode, x: number, y: number, tails: Tail[], loop?: LoopContext): { tails: Tail[]; y: number } {
     if (node.type === 'comment') return { tails, y };
     if (node.type === 'compound_statement' || node.type === 'else_clause') {
-      for (const child of children(node)) {
-        // A detached region is intentionally visible after an unresolved control boundary.
-        const next = this.statement(child, x, y, tails, loop); tails = next.tails; y = next.y;
-      }
-      return { tails, y };
+      return this.sequence(node, x, y, tails, loop);
     }
-    if (node.hasError || node.isMissing) return this.unknown(node, x, y, tails, '構文を確定できません。元のコードを修正して再変換してください。');
+    if ((node.hasError && !['if_statement', 'while_statement', 'for_statement', 'do_statement'].includes(node.type)) || node.isMissing) return this.unknown(node, x, y, tails, '構文を確定できません。元のコードを修正して再変換してください。');
     if (['preproc_def', 'preproc_function_def'].includes(node.type)) return this.unknown(node, x, y, tails, '関数内のマクロ定義には未対応です。');
     if (node.type === 'if_statement') {
-      const condition = field(node, 'condition')!;
-      const unsafe = this.unsafe(condition); if (unsafe) return this.unknown(node, x, y, tails, unsafe);
-      const decision = this.add('decision', text(condition), x, y, condition); this.connect(tails, decision);
+      const cond = field(node, 'condition');
+      if (!cond || !field(node, 'consequence')) return this.unknown(node, x, y, tails, '分岐の構造を確定できません。');
+      const unsafe = cond.hasError ? '条件式の構文を確定できません。分岐の本体は保持しました。' : this.unsafe(cond);
+      const decision = this.add('decision', condition(cond) + 'か？', x, y, cond); this.connect(tails, decision);
+      if (unsafe) this.diagnose(decision, cond, unsafe);
       const yes = field(node, 'consequence')!, alternative = field(node, 'alternative');
       const nextY = y + decision.h + GAP;
       const left = this.statement(yes, x, nextY, [{ id: decision.id, label: 'Yes' }], loop);
@@ -127,23 +177,32 @@ class Builder {
       return { tails: [{ id: join.id }], y: bottom + GAP / 2 };
     }
     if (['for_statement', 'while_statement', 'do_statement'].includes(node.type)) {
-      const body = field(node, 'body')!, condition = field(node, 'condition'), initializer = field(node, 'initializer'), update = field(node, 'update');
-      for (const part of [condition, initializer, update]) { if (part) { const unsafe = this.unsafe(part); if (unsafe) return this.unknown(node, x, y, tails, unsafe); } }
-      if (initializer) { const init = this.add('process', text(initializer).replace(/;$/, ''), x, y, initializer); this.connect(tails, init); tails = [{ id: init.id }]; y += init.h + GAP; }
+      const body = field(node, 'body'), cond = field(node, 'condition'), initializer = field(node, 'initializer'), update = field(node, 'update');
+      if (!body) return this.unknown(node, x, y, tails, 'ループ本体の範囲を確定できません。');
+      if (initializer) {
+        const issue = initializer.hasError ? '初期化式の構文を確定できません。' : this.unsafe(initializer);
+        if (issue) { const result = this.unknown(initializer, x, y, tails, issue); tails = result.tails; y = result.y; }
+        else if (!simpleDeclaration(initializer)) { const result = this.renderMeaning(summarize(initializer, this.isBuiltin), [initializer], x, y, tails); tails = result.tails; y = result.y; }
+      }
       const isDo = node.type === 'do_statement';
-      const start = this.add('loopStart', isDo ? '繰り返し開始' : condition ? `${text(condition)}\nの間、繰り返す` : '常に繰り返す', x, y, condition ?? node); this.connect(tails, start);
-      const finish = this.add('loopEnd', isDo ? `${text(condition)}\nなら繰り返す` : '繰り返し終了', x, 0, isDo ? condition ?? node : undefined);
+      const start = this.add('loopStart', isDo ? '繰り返し開始' : cond ? `${condition(cond)}間、繰り返す` : '常に繰り返す', x, y, cond ?? node); this.connect(tails, start);
+      const finish = this.add('loopEnd', isDo ? cond ? `${condition(cond)}なら繰り返す` : '' : '繰り返し終了', x, 0, isDo ? cond ?? node : undefined);
+      const conditionIssue = cond ? cond.hasError ? '条件式の構文を確定できません。' : this.unsafe(cond) : undefined;
+      if (conditionIssue && cond) this.diagnose(isDo ? finish : start, cond, conditionIssue);
+      if (isDo && !cond) this.diagnose(finish, node, 'ループ終了条件を確定できません。');
       const after = this.add('junction', '', x + WIDTH / 2 - 1, 0);
-      const increment = update ? this.add('process', text(update), x, 0, update) : null;
+      const increment = update ? this.add('process', summarize(update, this.isBuiltin).label, x, 0, update) : null;
+      const updateIssue = update ? update.hasError ? '更新式の構文を確定できません。' : this.unsafe(update) : undefined;
+      if (updateIssue && increment && update) this.diagnose(increment, update, updateIssue);
       const continueTarget = increment ?? finish;
-      const result = this.statement(body, x, y + start.h + GAP, [{ id: start.id, label: !isDo && condition ? 'Yes' : undefined }], { breakId: after.id, continueId: continueTarget.id, lane: x + span(body) + 65 });
+      const result = this.statement(body, x, y + start.h + GAP, [{ id: start.id, label: !isDo && cond ? 'Yes' : undefined }], { breakId: after.id, continueId: continueTarget.id, lane: x + span(body) + 65 });
       let bottom = result.y;
       if (increment) { increment.y = bottom; this.connect(result.tails, increment); bottom += increment.h + GAP; }
-      finish.y = bottom; this.connect(increment ? [{ id: increment.id }] : result.tails, finish);
+      finish.y = bottom; this.connect(increment ? updateIssue ? [] : [{ id: increment.id }] : result.tails, finish);
       this.edge(finish.id, start.id, { label: isDo ? 'Yes' : undefined, from: 'left', to: 'left', via: [{ x: x - 48, y: finish.y + finish.h / 2 }, { x: x - 48, y: start.y + start.h / 2 }] });
       after.y = bottom + finish.h + GAP;
-      if (isDo && !constantTrue(condition)) this.edge(finish.id, after.id, { label: 'No' });
-      else if (!isDo && condition && !constantTrue(condition)) this.edge(start.id, after.id, { label: 'No', from: 'right', to: 'right', via: [{ x: x + span(body) + 105, y: start.y + start.h / 2 }, { x: x + span(body) + 105, y: after.y + 1 }] });
+      if (isDo && !constantTrue(cond)) this.edge(finish.id, after.id, { label: 'No' });
+      else if (!isDo && cond && !constantTrue(cond)) this.edge(start.id, after.id, { label: 'No', from: 'right', to: 'right', via: [{ x: x + span(body) + 105, y: start.y + start.h / 2 }, { x: x + span(body) + 105, y: after.y + 1 }] });
       // Infinite loops have a continuation only when a break can reach it.
       const exits = this.edges.some(e => e.target === after.id);
       return { tails: exits ? [{ id: after.id }] : [], y: after.y + GAP / 2 };
@@ -163,24 +222,12 @@ class Builder {
     if (node.type === 'declaration' || node.type === 'expression_statement') {
       if (!children(node).length) return { tails, y };
       const unsafe = this.unsafe(node); if (unsafe) return this.unknown(node, x, y, tails, unsafe);
-      let kind: Shape = 'process', label = node.text.trim().replace(/;$/, '');
-      const expr = children(node)[0];
-      if (expr?.type === 'call_expression') {
-        const name = text(field(expr, 'function')), args = field(expr, 'arguments')?.namedChildren ?? [];
-        if (this.functions.has(name)) kind = 'subroutine';
-        else if (['printf', 'puts', 'putchar'].includes(name)) { kind = 'display'; label = `${label}\nを標準出力に表示`; }
-        else if (['scanf', 'getchar'].includes(name) || (name === 'fgets' && text(args[2] ?? null) === 'stdin')) { kind = 'input'; label = `${label}\n標準入力から読み込む`; }
-        else if (['fopen', 'fclose', 'fread', 'fwrite', 'fprintf', 'fscanf', 'fgets', 'fputs', 'fgetc', 'fputc', 'fflush'].includes(name)) kind = 'file';
-        else kind = 'subroutine';
-      } else if (/^[A-Za-z_]\w*\s*=\s*-?\d+$/.test(label)) {
-        const [name, value] = label.split('='); label = `${name.trim()} に ${value.trim()} を代入`;
-      } else if (/^[A-Za-z_]\w*\+\+$/.test(label)) label = `${label.slice(0, -2)} を1増やす`;
-      const n = this.add(kind, label, x, y, node); this.connect(tails, n);
-      return { tails: [{ id: n.id }], y: y + n.h + GAP };
+      if (simpleDeclaration(node)) return { tails, y };
+      return this.renderMeaning(summarize(node, this.isBuiltin), [node], x, y, tails);
     }
     return this.unknown(node, x, y, tails, `「${node.type}」には未対応です。この範囲を空白にし、後続への接続を保留しました。`);
   }
-  build(body: SyntaxNode, blocked?: string): FlowPage {
+  build(body: SyntaxNode): FlowPage {
     const start = this.add('terminal', '開始', 120, 40);
     // A local name can shadow a known function. Conservatively reject calls to it.
     walk(body.parent ?? body, n => {
@@ -194,7 +241,7 @@ class Builder {
         }
       }
     });
-    const result = blocked ? this.unknown(body, 120, start.y + start.h + GAP, [{ id: start.id }], blocked) : this.statement(body, 120, start.y + start.h + GAP, [{ id: start.id }]);
+    const result = this.statement(body, 120, start.y + start.h + GAP, [{ id: start.id }]);
     this.end.y = result.y + 16; this.connect(result.tails, this.end);
     for (const n of this.returns) {
       const last = n.x === this.end.x && !this.nodes.some(other => other !== this.end && other.y > n.y && other.kind !== 'junction');
@@ -211,22 +258,21 @@ export function convertTree(root: SyntaxNode, source: string): Conversion {
   if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(source)) throw new Error('コードに使用できない制御文字が含まれています。文字コードを確認してください。');
   const diagnostics: Diagnostic[] = [], pages: FlowPage[] = [];
   const functions = new Set<string>(), macros = new Set<string>(), headers = new Set<string>();
-  let blocked: string | undefined;
+
   walk(root, n => { if (['preproc_def', 'preproc_function_def'].includes(n.type)) { const name = field(n, 'name'); if (name) macros.add(name.text); } });
   for (const n of children(root)) {
     if (n.type === 'function_definition') functions.add(functionName(n));
     if (n.type === 'preproc_include') {
       const match = n.text.match(/<([^>]+)>/);
       if (match && ['stdio.h', 'stdlib.h', 'math.h', 'string.h', 'stddef.h', 'stdint.h', 'limits.h', 'float.h', 'time.h'].includes(match[1])) headers.add(match[1]);
-      else blocked = '内容を確認できないヘッダーが含まれています。マクロによる構文変更を否定できないため、関数本体を空白にしました。展開済みのCコードを入力してください。';
+      else diagnostics.push({ id: 'd' + (diagnostics.length + 1), range: range(n), message: `ヘッダー ${text(field(n, 'path')) || n.text} の内容は未解析です。図は入力されたコードの構文に基づきます。外部マクロの影響は確認してください。` });
     }
-    if (n.type.startsWith('preproc_') && !['preproc_include', 'preproc_def', 'preproc_function_def'].includes(n.type)) blocked = '条件付きコンパイル・プリプロセッサ命令の影響を確定できません。展開済みのCコードを入力してください。';
     if (n.type === 'declaration') for (const d of children(n)) if (d.type === 'function_declarator') { const id = field(d, 'declarator'); if (id?.type === 'identifier') functions.add(id.text); }
   }
   for (const n of children(root)) {
     if (n.type === 'function_definition') {
       const name = functionName(n), body = field(n, 'body');
-      if (body) pages.push(new Builder(name, diagnostics, functions, macros, headers, span(body)).build(body, blocked));
+      if (body) pages.push(new Builder(name, diagnostics, functions, macros, headers, span(body)).build(body));
     } else if (!['comment', 'preproc_include', 'preproc_def', 'preproc_function_def', 'declaration', 'type_definition', 'struct_specifier', 'enum_specifier'].includes(n.type)) {
       const builder = new Builder('未解決の領域', diagnostics, functions, macros, headers, WIDTH);
       const start = builder.add('terminal', '開始', 120, 40);

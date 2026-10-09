@@ -17,9 +17,9 @@ export function Diagram({ page, zoom, selected, onSelect }: { page: FlowPage; zo
     })}
     {page.nodes.filter(n => n.kind !== 'junction').map(node => {
       const lines = wrapLabel(node.label, node.kind === 'decision' ? 22 : 26);
-      return <g key={node.id} transform={`translate(${node.x} ${node.y})`} className={`${s.shape} ${selected === node.id ? s.selectedShape : ''}`} role={node.range ? 'button' : undefined} tabIndex={node.range ? 0 : undefined} aria-label={node.kind === 'unknown' ? `未解決の処理、${node.range?.line}行目` : `${node.label}${node.range ? `、${node.range.line}行目` : ''}`} onClick={() => onSelect(node)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(node); } }}>
+      return <g key={node.id} transform={`translate(${node.x} ${node.y})`} className={`${s.shape} ${selected === node.id ? s.selectedShape : ''}`} role={node.range ? 'button' : undefined} tabIndex={node.range ? 0 : undefined} aria-label={(node.kind === 'unknown' || node.unresolved) ? `未解決の処理、${node.range?.line}行目` : `${node.label}${node.range ? `、${node.range.line}行目` : ''}`} onClick={() => onSelect(node)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(node); } }}>
         <title>{node.range ? `${node.range.line}〜${node.range.endLine}行目を確認` : node.label}</title>
-        <path d={svgPath(node.kind, node.w, node.h)} fill={node.kind === 'unknown' ? '#fffcf3' : '#fff'} stroke={node.kind === 'unknown' ? '#ad8550' : '#465c6a'} strokeWidth="1.5" strokeDasharray={node.kind === 'unknown' ? '6 4' : undefined} />
+        <path d={svgPath(node.kind, node.w, node.h)} fill={(node.kind === 'unknown' || node.unresolved) ? '#fffcf3' : '#fff'} stroke={(node.kind === 'unknown' || node.unresolved) ? '#ad8550' : '#465c6a'} strokeWidth="1.5" strokeDasharray={(node.kind === 'unknown' || node.unresolved) ? '6 4' : undefined} />
         {node.kind === 'subroutine' && <path d={`M${node.w * .09},0 V${node.h} M${node.w * .91},0 V${node.h}`} stroke="#465c6a" fill="none" strokeWidth="1.5" />}
         <text x={node.w / 2} y={node.h / 2 - (lines.length - 1) * 10 + 5} textAnchor="middle" className={s.nodeLabel}>{lines.map((line, i) => <tspan key={i} x={node.w / 2} dy={i ? 20 : 0}>{line}</tspan>)}</text>
       </g>;

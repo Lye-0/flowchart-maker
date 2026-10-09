@@ -24,10 +24,15 @@ describe('Cからの制御フロー', () => {
     const r = convert(source), p = r.pages[0];
     expect(r.diagnostics).toEqual([]);
     expect(p.nodes.some(n => n.kind === 'unknown')).toBe(false);
-    expect(p.nodes.filter(n => n.kind === 'display')).toHaveLength(3);
+    expect(p.nodes.filter(n => n.kind === 'display')).toHaveLength(2);
     expect(p.nodes.filter(n => n.kind === 'input')).toHaveLength(1);
-    expect(p.nodes.find(n => n.label === 'srandom(time(NULL))')?.kind).toBe('subroutine');
-    expect(p.nodes.find(n => n.label === 'num = random() % 128 + 1')?.kind).toBe('process');
+    expect(p.nodes).toHaveLength(6);
+    expect(p.nodes.filter(n => n.kind === 'process').map(n => n.label)).toEqual(['乱数を初期化し、\n1〜128の乱数を\nnumに代入']);
+    expect(p.nodes.find(n => n.kind === 'input')?.label).toBe('「入力: 」と表示し\nuser_inputに入力');
+    expect(p.nodes.find(n => n.kind === 'process')?.range).toMatchObject({ line: 9, endLine: 12 });
+    expect(p.nodes.find(n => n.kind === 'input')?.range).toMatchObject({ line: 15, endLine: 16 });
+    mkdirSync('test-results', { recursive: true });
+    writeFileSync('test-results/random-input-summary.drawio', toDrawio(r));
     let current = p.nodes.find(n => n.label === '開始')!;
     const visited = new Set([current.id]);
     while (current.label !== '終了') {
@@ -65,20 +70,20 @@ describe('Cからの制御フロー', () => {
   it('forのcontinueは更新式へ進む', () => {
     const p = convert(samples[1].code).pages[0];
     const next = p.nodes.find(n => n.label === '次の繰り返しへ')!;
-    const update = p.nodes.find(n => n.label === 'k++')!;
+    const update = p.nodes.find(n => n.sourceText === 'k++')!;
     expect(p.edges.some(e => e.source === next.id && e.target === update.id)).toBe(true);
   });
   it('do whileは本体の後で条件を評価する', () => {
     const p = convert('int main(){int n=0; do { n++; } while(n<3); return n;}').pages[0];
     const start = p.nodes.find(n => n.kind === 'loopStart')!, end = p.nodes.find(n => n.kind === 'loopEnd')!, body = p.nodes.find(n => n.label.includes('1増やす'))!;
-    expect(body.y).toBeLessThan(end.y); expect(start.label).not.toContain('n<3'); expect(end.label).toContain('n<3');
+    expect(body.y).toBeLessThan(end.y); expect(start.label).not.toContain('n<3'); expect(end.sourceText).toContain('n<3');
     expect(p.edges.find(e => e.source === end.id && e.target === start.id)?.label).toBe('Yes');
   });
   it('入れ子のbreakは内側ループだけを抜ける', () => {
     const p = convert('int main(){for(int i=0;i<3;i++){while(i<2){break;} i++;}return 0;}').pages[0];
     const br = p.nodes.find(n => n.label === 'ループを抜ける')!;
     const target = p.nodes.find(n => n.id === p.edges.find(e => e.source === br.id)?.target)!;
-    const update = p.nodes.find(n => n.label === 'i を1増やす')!;
+    const update = p.nodes.find(n => n.sourceText === 'i++;')!;
     expect(target.y).toBeLessThan(update.y);
     expect(p.edges.some(e => e.source === target.id && e.target === update.id)).toBe(true);
   });
@@ -159,7 +164,7 @@ describe('編集可能なdrawio出力', () => {
   it('XMLの特殊文字をエスケープし、全ページを出力する', () => {
     const xml = toDrawio(convert(samples[2].code));
     expect(xml).toContain('compressed="false"'); expect(xml.match(/<diagram /g)).toHaveLength(2);
-    expect(xml).toContain('&lt;='); expect(xml).toContain('sourceLine='); expect(xml).toContain('&#10;');
+    expect(xml).toContain('&lt;='); expect(xml).toContain('sourceLine='); expect(toDrawio(convert(readFileSync('tests/fixtures/random-input.c', 'utf8')))).toContain('&#10;');
   });
   it('未知の図形ラベルは空で、理由をメタデータに保持する', () => {
     const xml = toDrawio(convert(samples[3].code));
@@ -169,5 +174,73 @@ describe('編集可能なdrawio出力', () => {
     const value = stencil('loopStart').slice(8, -1);
     const xml = decodeURIComponent(inflateRaw(Uint8Array.from(atob(value), c => c.charCodeAt(0)), { to: 'string' }));
     expect(xml).toContain('<shape name="loopStart"'); expect(xml).toContain('<connections>');
+  });
+});
+
+describe('意味単位の要約と局所的な未解決', () => {
+  it('未知のヘッダーがあってもprintfとscanfを残す', () => {
+    const r=convert('#include <stdio.h>\n#include "unavailable.h"\nint main(){int n;printf("hello");scanf("%d",&n);printf("%d",n);return 0;}');
+    expect(r.diagnostics).toHaveLength(1); expect(r.diagnostics[0].nodeId).toBeUndefined();
+    expect(r.pages[0].nodes.filter(n=>n.kind==='display')).toHaveLength(2);
+    expect(r.pages[0].nodes.filter(n=>n.kind==='input')).toHaveLength(1);
+    expect(r.pages[0].nodes.some(n=>n.kind==='unknown')).toBe(false);
+  });
+  it('未知の文を局所的な空白にし前後の表示を維持する', () => {
+    const r=convert('#include <stdio.h>\nint main(){puts("before");mystery();puts("after");return 0;}');
+    const p=r.pages[0], blank=p.nodes.find(n=>n.kind==='unknown')!;
+    expect(r.diagnostics).toHaveLength(1); expect(blank.label).toBe('');
+    expect(p.nodes.filter(n=>n.kind==='display').map(n=>n.label)).toEqual(['「before」を表示','「after」を表示']);
+    expect(p.edges.some(e=>e.source===blank.id)).toBe(false);
+  });
+  it('未知の条件でも分岐の形と両方の表示を保持する', () => {
+    const r=convert('#include <stdio.h>\nint main(){if(check()){puts("yes");}else{puts("no");}return 0;}');
+    const p=r.pages[0], decision=p.nodes.find(n=>n.kind==='decision')!;
+    expect(decision.label).toBe(''); expect(decision.unresolved).toBe(true);
+    expect(p.nodes.filter(n=>n.kind==='display')).toHaveLength(2);
+    expect(p.edges.filter(e=>e.source===decision.id).map(e=>e.label).sort()).toEqual(['No','Yes']);
+  });
+  it('ループ条件が未解決でも本体の表示を保持する', () => {
+    const r=convert('#include <stdio.h>\nint main(){while(check()){puts("body");}puts("after");}');
+    expect(r.pages[0].nodes.find(n=>n.kind==='loopStart')?.label).toBe('');
+    expect(r.pages[0].nodes.filter(n=>n.kind==='display')).toHaveLength(2);
+  });
+  it('構文回復で一体化した範囲だけ空白にし他の枝と後続を保持する', () => {
+    const r=convert('#include <stdio.h>\nint main(){if(1){int x=;puts("inside");}else{puts("other");}puts("after");}');
+    expect(r.diagnostics.length).toBeGreaterThan(0);
+    expect(r.pages[0].nodes.filter(n=>n.kind==='display').map(n=>n.label)).toEqual(['「other」を表示','「after」を表示']);
+    expect(r.pages[0].nodes.find(n=>n.kind==='unknown')?.sourceText).toContain('puts("inside")');
+    expect(r.pages[0].nodes.filter(n=>n.kind==='decision')).toHaveLength(1);
+  });
+  it('単純宣言だけ省きVLAと副作用を残す', () => {
+    const r=convert('int f(int n){int x;int a[n++];return n;}');
+    expect(r.pages[0].nodes.some(n=>n.label==='int x')).toBe(false);
+    expect(r.pages[0].nodes.some(n=>n.sourceText==='int a[n++];')).toBe(true);
+  });
+  it('main末尾のreturn 0は終了へ統合し早期returnは保持する', () => {
+    const p=convert('int main(){if(1){return 0;}return 0;}').pages[0];
+    expect(p.nodes.filter(n=>n.label==='0 を返す')).toHaveLength(1);
+    expect(p.nodes.find(n=>n.label==='終了')?.sourceText).toBe('return 0;');
+  });
+  it('乱数準備と生成の間に出力があれば統合しない', () => {
+    const p=convert('#include <stdio.h>\n#include <stdlib.h>\nint main(){srandom(1);puts("wait");int n=random()%10+1;return 0;}').pages[0];
+    expect(p.nodes.filter(n=>n.kind==='process')).toHaveLength(2);
+  });
+  it('異なる乱数系列やユーザー定義randomの意味を推測しない', () => {
+    const r=convert('#include <stdlib.h>\nint main(){srand(1);int n=random()%10+1;return 0;}');
+    expect(r.pages[0].nodes.filter(n=>n.kind==='process')).toHaveLength(2);
+    const custom=convert('#include <stdlib.h>\nint random(){return -1;}int main(){int n=random()%10+1;}');
+    expect(custom.pages[1].nodes.some(n=>n.label.includes('乱数'))).toBe(false);
+  });
+  it('任意の文字出力を入力案内と決めつけない', () => {
+    const p=convert('#include <stdio.h>\nint main(){int n;printf("done");scanf("%d",&n);}').pages[0];
+    expect(p.nodes.filter(n=>n.kind==='display')).toHaveLength(1);
+    expect(p.nodes.filter(n=>n.kind==='input')).toHaveLength(1);
+  });
+  it('まとめた図形から元コードと行範囲を復元できる', () => {
+    const r=convert(readFileSync('tests/fixtures/random-input.c','utf8'));
+    const p=r.pages[0].nodes.find(n=>n.kind==='input')!;
+    const raw=r.source.slice(p.range!.start,p.range!.end);
+    expect(raw).toContain('printf'); expect(raw).toContain('scanf');
+    expect(toDrawio(r)).toContain('sourceCode=');
   });
 });

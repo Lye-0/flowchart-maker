@@ -13,7 +13,7 @@ export function toDrawio(conversion: Conversion): string {
       const label = wrapLabel(n.label, n.kind === 'decision' ? 22 : 26).join('\n');
       const cell = `<mxCell style="${xmlEscape(style)}" vertex="1" parent="1"><mxGeometry x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" as="geometry"/></mxCell>`;
       // Explicit newlines are numeric entities: XML attributes otherwise normalize them to spaces.
-      return `<object id="${n.id}" label="${xmlEscape(label).replace(/\n/g, '&#10;')}" sourceLine="${n.range?.line ?? ''}" sourceEndLine="${n.range?.endLine ?? ''}" status="${warning ? 'unresolved' : 'converted'}" tooltip="${xmlEscape(warning?.message ?? (n.range ? `元コード ${n.range.line}〜${n.range.endLine}行` : ''))}">${cell}</object>`;
+      return `<object id="${n.id}" label="${xmlEscape(label).replace(/\n/g, '&#10;')}" sourceCode="${xmlEscape(n.sourceText ?? '').replace(/\n/g, '&#10;')}" sourceLine="${n.range?.line ?? ''}" sourceEndLine="${n.range?.endLine ?? ''}" status="${warning ? 'unresolved' : 'converted'}" tooltip="${xmlEscape(warning?.message ?? (n.range ? `元コード ${n.range.line}〜${n.range.endLine}行` : ''))}">${cell}</object>`;
     }).join('\n');
     const edges = page.edges.map(e => {
       const [exitX, exitY] = port[e.from], [entryX, entryY] = port[e.to];
@@ -23,5 +23,5 @@ export function toDrawio(conversion: Conversion): string {
     }).join('\n');
     return `<diagram id="page-${index + 1}" name="${xmlEscape(page.name)}"><mxGraphModel grid="1" gridSize="10" page="1" pageScale="1" pageWidth="${Math.max(827, page.width)}" pageHeight="${Math.max(1169, page.height)}"><root><mxCell id="0"/><mxCell id="1" parent="0"/>${nodes}${edges}</root></mxGraphModel></diagram>`;
   }).join('\n');
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<mxfile host="app.diagrams.net" compressed="false">${pages}</mxfile>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<mxfile host="app.diagrams.net" compressed="false" analysisWarnings="${xmlEscape(JSON.stringify(conversion.diagnostics.map(d => ({ message: d.message, line: d.range.line, endLine: d.range.endLine, page: d.page }))))}">${pages}</mxfile>`;
 }
