@@ -1,6 +1,7 @@
 import { chromium, expect } from '@playwright/test';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
+import { samples } from '../tests/fixtures/samples.ts';
 
 await mkdir('test-results', { recursive: true });
 const browser = await chromium.launch({ channel: 'msedge', headless: true });
@@ -10,10 +11,22 @@ try {
   page.on('pageerror', e => errors.push(e.message));
   page.on('request', r => { if (!r.url().startsWith('http://127.0.0.1') && !r.url().startsWith('blob:')) external.push(r.url()); });
   await page.goto(process.env.APP_URL ?? 'http://127.0.0.1:5173/flowchart-maker/');
-  await page.getByText('変換済み', { exact: true }).waitFor({ timeout: 20000 });
-  await page.screenshot({ path: 'test-results/desktop.png', fullPage: true });
   const editor = page.getByRole('textbox', { name: 'Cソースコード' });
   const save = page.getByRole('button', { name: '.drawio を保存' });
+  await expect(editor).toHaveValue('');
+  await expect(page.getByText('入力待ち', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '変換する', exact: true })).toBeDisabled();
+  await expect(save).toBeDisabled();
+  await expect(page.getByRole('combobox')).toHaveCount(0);
+  await page.screenshot({ path: 'test-results/empty-desktop.png', fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: 'test-results/empty-mobile.png', fullPage: true });
+  assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await editor.fill(samples[0].code);
+  await page.getByRole('button', { name: '変換する', exact: true }).click();
+  await page.getByText('変換済み', { exact: true }).waitFor({ timeout: 20000 });
+  await page.screenshot({ path: 'test-results/desktop.png', fullPage: true });
   const downloadPromise = page.waitForEvent('download'); await save.click();
   const download = await downloadPromise; await download.saveAs('test-results/even-odd.drawio');
   const xml = await readFile('test-results/even-odd.drawio', 'utf8');
@@ -26,20 +39,23 @@ try {
   await page.getByText('変換済み', { exact: true }).waitFor(); assert(await save.isEnabled());
   await page.getByRole('group', { name: 'main のフローチャート' }).getByRole('button', { name: /n を1増やす/ }).click();
   assert.equal(await editor.evaluate(el => el.value.slice(el.selectionStart, el.selectionEnd)), 'n++;');
-  page.on('dialog', dialog => dialog.accept());
-  await page.getByLabel('サンプルコード').selectOption('3');
+  await editor.fill(samples[3].code);
+  await page.getByRole('button', { name: '変換する', exact: true }).click();
   await page.getByText('変換済み', { exact: true }).waitFor();
   assert(await page.getByRole('button', { name: /main · 6–6 行/ }).isVisible());
   assert.equal(await page.locator('g[aria-label^="未解決の処理"] text').textContent(), '');
   await page.screenshot({ path: 'test-results/unresolved.png', fullPage: true });
-  await page.getByLabel('サンプルコード').selectOption('2');
+  await editor.fill(samples[2].code);
+  await page.getByRole('button', { name: '変換する', exact: true }).click();
   await page.getByText('変換済み', { exact: true }).waitFor();
   assert(await page.getByRole('button', { name: 'show()' }).isVisible());
   await page.getByRole('button', { name: 'main()' }).click();
   const multiDownload = page.waitForEvent('download'); await save.click(); await (await multiDownload).saveAs('test-results/functions.drawio');
   await page.getByRole('button', { name: '使い方', exact: true }).click();
   assert(await page.getByRole('dialog').isVisible()); await page.keyboard.press('Escape');
-  await page.getByLabel('Cファイルを読み込む').setInputFiles({ name: 'upload.c', mimeType: 'text/plain', buffer: Buffer.from('int main(){return 42;}') });
+  const pickerPromise = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'ファイルを選択', exact: true }).click();
+  await (await pickerPromise).setFiles({ name: 'upload.c', mimeType: 'text/plain', buffer: Buffer.from('int main(){return 42;}') });
   await expect(editor).toHaveValue('int main(){return 42;}');
   assert(await save.isDisabled());
   await page.getByRole('button', { name: '変換する', exact: true }).click(); await page.getByText('変換済み', { exact: true }).waitFor();
@@ -47,6 +63,6 @@ try {
   await page.screenshot({ path: 'test-results/mobile.png', fullPage: true });
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   assert.deepEqual(errors, []); assert.deepEqual(external, []);
-  await writeFile('test-results/smoke.json', JSON.stringify({ passed: true, parsed, errors, externalRequests: external, checks: ['initial conversion', 'editable XML download', 'stale export disabled', 'node to source selection', 'unknown blanks', 'function pages', 'help keyboard dismissal', 'C file upload', 'mobile layout'] }, null, 2));
+  await writeFile('test-results/smoke.json', JSON.stringify({ passed: true, parsed, errors, externalRequests: external, checks: ['empty initial state', 'direct input conversion', 'native file picker', 'editable XML download', 'stale export disabled', 'node to source selection', 'unknown blanks', 'function pages', 'help keyboard dismissal', 'C file upload', 'mobile layout'] }, null, 2));
   console.log('Browser smoke passed: upload → worker → preview → editable XML. No external requests or browser errors.');
 } finally { await browser.close(); }

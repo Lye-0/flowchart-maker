@@ -6,7 +6,7 @@ import { convertTree } from '../src/engine/convert';
 import { toDrawio } from '../src/engine/drawio';
 import { stencil } from '../src/engine/shapes';
 import { inflateRaw } from 'pako';
-import { samples } from '../src/samples';
+import { samples } from './fixtures/samples';
 
 let parser: Parser;
 beforeAll(async () => {
