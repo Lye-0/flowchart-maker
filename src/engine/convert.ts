@@ -40,12 +40,13 @@ export function wrapLabel(label: string, max = 26): string[] {
   return lines;
 }
 type Tail = { id: string; label?: string };
-interface LoopContext { breakId: string; continueId: string; lane: number }
+interface LoopContext { breakId: string; continueId: string; breakLane: number; continueLane: number; depth: number }
 
 class Builder {
   nodes: FlowNode[] = [];
   edges: FlowEdge[] = [];
   count = 0;
+  maxLoopDepth = 0;
   end: FlowNode;
   returns: FlowNode[] = [];
   shadowed = new Set<string>();
@@ -185,7 +186,9 @@ class Builder {
         else if (!simpleDeclaration(initializer)) { const result = this.renderMeaning(summarize(initializer, this.isBuiltin), [initializer], x, y, tails); tails = result.tails; y = result.y; }
       }
       const isDo = node.type === 'do_statement';
-      const start = this.add('loopStart', isDo ? '繰り返し開始' : cond ? `${condition(cond)}間、繰り返す` : '常に繰り返す', x, y, cond ?? node); this.connect(tails, start);
+      const depth = (loop?.depth ?? 0) + 1;
+      const returnLane = x - 48 - (this.maxLoopDepth - depth) * 40;
+      const start = this.add('loopStart', isDo ? '繰り返し開始' : cond ? `${condition(cond)}${/(以下|以上|未満)$/.test(condition(cond)) ? 'の間' : '間'}、繰り返す` : '常に繰り返す', x, y, cond ?? node); this.connect(tails, start);
       const finish = this.add('loopEnd', isDo ? cond ? `${condition(cond)}なら繰り返す` : '' : '繰り返し終了', x, 0, isDo ? cond ?? node : undefined);
       const conditionIssue = cond ? cond.hasError ? '条件式の構文を確定できません。' : this.unsafe(cond) : undefined;
       if (conditionIssue && cond) this.diagnose(isDo ? finish : start, cond, conditionIssue);
@@ -195,14 +198,14 @@ class Builder {
       const updateIssue = update ? update.hasError ? '更新式の構文を確定できません。' : this.unsafe(update) : undefined;
       if (updateIssue && increment && update) this.diagnose(increment, update, updateIssue);
       const continueTarget = increment ?? finish;
-      const result = this.statement(body, x, y + start.h + GAP, [{ id: start.id, label: !isDo && cond ? 'Yes' : undefined }], { breakId: after.id, continueId: continueTarget.id, lane: x + span(body) + 65 });
+      const result = this.statement(body, x, y + start.h + GAP, [{ id: start.id, label: !isDo && cond ? 'Yes' : undefined }], { breakId: after.id, continueId: continueTarget.id, continueLane: returnLane + 20, breakLane: x + span(body) + 105, depth });
       let bottom = result.y;
       if (increment) { increment.y = bottom; this.connect(result.tails, increment); bottom += increment.h + GAP; }
       finish.y = bottom; this.connect(increment ? updateIssue ? [] : [{ id: increment.id }] : result.tails, finish);
-      this.edge(finish.id, start.id, { label: isDo ? 'Yes' : undefined, from: 'left', to: 'left', via: [{ x: x - 48, y: finish.y + finish.h / 2 }, { x: x - 48, y: start.y + start.h / 2 }] });
+      this.edge(finish.id, start.id, { label: isDo ? 'Yes' : undefined, from: 'left', to: 'left', via: [{ x: returnLane, y: finish.y + finish.h / 2 }, { x: returnLane, y: start.y + start.h / 2 }] });
       after.y = bottom + finish.h + GAP;
       if (isDo && !constantTrue(cond)) this.edge(finish.id, after.id, { label: 'No' });
-      else if (!isDo && cond && !constantTrue(cond)) this.edge(start.id, after.id, { label: 'No', from: 'right', to: 'right', via: [{ x: x + span(body) + 105, y: start.y + start.h / 2 }, { x: x + span(body) + 105, y: after.y + 1 }] });
+      else if (!isDo && cond && !constantTrue(cond)) this.edge(start.id, after.id, { label: 'No', from: 'right', to: 'right', via: [{ x: x + span(body) + 145, y: start.y + start.h / 2 }, { x: x + span(body) + 145, y: after.y + 1 }] });
       // Infinite loops have a continuation only when a break can reach it.
       const exits = this.edges.some(e => e.target === after.id);
       return { tails: exits ? [{ id: after.id }] : [], y: after.y + GAP / 2 };
@@ -210,7 +213,7 @@ class Builder {
     if (node.type === 'break_statement' || node.type === 'continue_statement') {
       if (!loop) return this.unknown(node, x, y, tails, '対応するループを特定できません。');
       const n = this.add('process', node.type === 'break_statement' ? 'ループを抜ける' : '次の繰り返しへ', x, y, node); this.connect(tails, n);
-      this.edge(n.id, node.type === 'break_statement' ? loop.breakId : loop.continueId, { from: 'right', to: 'right', via: [{ x: loop.lane, y: n.y + n.h / 2 }] });
+      this.edge(n.id, node.type === 'break_statement' ? loop.breakId : loop.continueId, { from: node.type === 'break_statement' ? 'right' : 'left', to: node.type === 'break_statement' ? 'right' : 'top', via: [{ x: node.type === 'break_statement' ? loop.breakLane : loop.continueLane, y: n.y + n.h / 2 }] });
       return { tails: [], y: y + n.h + GAP };
     }
     if (node.type === 'return_statement') {
@@ -228,7 +231,14 @@ class Builder {
     return this.unknown(node, x, y, tails, `「${node.type}」には未対応です。この範囲を空白にし、後続への接続を保留しました。`);
   }
   build(body: SyntaxNode): FlowPage {
-    const start = this.add('terminal', '開始', 120, 40);
+    const loopDepth = (n: SyntaxNode, depth = 0): number => {
+      const current = depth + (['for_statement', 'while_statement', 'do_statement'].includes(n.type) ? 1 : 0);
+      return Math.max(current, ...children(n).map(child => loopDepth(child, current)));
+    };
+    this.maxLoopDepth = loopDepth(body);
+    const baseX = 120 + Math.max(0, this.maxLoopDepth - 2) * 40;
+    this.end.x = baseX;
+    const start = this.add('terminal', '開始', baseX, 40);
     // A local name can shadow a known function. Conservatively reject calls to it.
     walk(body.parent ?? body, n => {
       if (n.type === 'parameter_declaration' || n.type === 'init_declarator' || n.type === 'declaration') {
@@ -241,14 +251,18 @@ class Builder {
         }
       }
     });
-    const result = this.statement(body, 120, start.y + start.h + GAP, [{ id: start.id }]);
+    const result = this.statement(body, baseX, start.y + start.h + GAP, [{ id: start.id }]);
     this.end.y = result.y + 16; this.connect(result.tails, this.end);
     for (const n of this.returns) {
       const last = n.x === this.end.x && !this.nodes.some(other => other !== this.end && other.y > n.y && other.kind !== 'junction');
       this.edge(n.id, this.end.id, last ? {} : { from: 'right', to: 'right', via: [{ x: this.outerLane, y: n.y + n.h / 2 }, { x: this.outerLane, y: this.end.y + this.end.h / 2 }] });
     }
     for (const e of this.edges) {
-      if (e.via?.length === 1 && e.to === 'right') { const target = this.nodes.find(n => n.id === e.target)!; e.via.push({ x: e.via[0].x, y: target.y + target.h / 2 }); }
+      if (e.via?.length === 1) {
+        const target = this.nodes.find(n => n.id === e.target)!;
+        if (e.to === 'right') e.via.push({ x: e.via[0].x, y: target.y + target.h / 2 });
+        else if (e.to === 'top') e.via.push({ x: e.via[0].x, y: target.y - 24 }, { x: target.x + target.w / 2, y: target.y - 24 });
+      }
     }
     return { name: this.name, nodes: this.nodes, edges: this.edges, width: Math.max(...this.nodes.map(n => n.x + n.w), ...this.edges.flatMap(e => e.via?.map(p => p.x) ?? [])) + 64, height: this.end.y + this.end.h + 48 };
   }

@@ -5,5 +5,5 @@ export default defineConfig({
   plugins: [react()],
   base: '/flowchart-maker/',
   worker: { format: 'es' },
-  server: { fs: { deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/.private-reference/**'] } },
+  server: { fs: { deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/.private-reference/**', '**/.verification-report/**'] } },
 });

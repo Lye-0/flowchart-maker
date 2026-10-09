@@ -106,6 +106,8 @@ export function summarize(node: Node, builtin: Builtin): Meaning {
   if (a) {
     const r = randomRange(a.value, builtin);
     if (r) return { kind: 'process', label: `${r.lower}〜${r.upper}の乱数を\n${a.target.text}に代入`, random: r.family };
+    const assignedCall = call(a.value);
+    if (assignedCall) return { kind: 'subroutine', label: `${a.value.text}の結果を\n${a.target.text}に代入` };
     return { kind: 'process', label: `${a.target.text}を${a.value.text}とする`, merge: !containsCall(a.value) && a.target.type === 'identifier' };
   }
   if (n.type === 'update_expression') {

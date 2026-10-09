@@ -40,3 +40,13 @@ export function edgePoints(page: FlowPage, edge: FlowEdge): Point[] {
   const mid = (a.y + b.y) / 2;
   return [a, { x: a.x, y: mid }, { x: b.x, y: mid }, b];
 }
+
+// Place a branch label outside its source shape, including leftward loop returns.
+export function edgeLabelPosition(page: FlowPage, edge: FlowEdge): Point & { anchor: 'start' | 'end' } {
+  const [a, b] = edgePoints(page, edge);
+  if (Math.abs(a.x - b.x) > 1) {
+    const left = b.x < a.x;
+    return { x: a.x + (left ? -12 : 18), y: a.y - 10, anchor: left ? 'end' : 'start' };
+  }
+  return { x: a.x + 12, y: a.y + (b.y < a.y ? -15 : 25), anchor: 'start' };
+}

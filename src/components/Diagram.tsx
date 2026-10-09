@@ -1,4 +1,4 @@
-import { edgePoints, svgPath } from '../engine/shapes';
+import { edgePoints, svgPath, edgeLabelPosition } from '../engine/shapes';
 import { wrapLabel } from '../engine/convert';
 import type { FlowNode, FlowPage } from '../engine/types';
 import s from '../App.module.css';
@@ -7,12 +7,11 @@ export function Diagram({ page, zoom, selected, onSelect }: { page: FlowPage; zo
   return <svg className={s.diagram} width={page.width * zoom} height={page.height * zoom} viewBox={`0 0 ${page.width} ${page.height}`} aria-label={`${page.name} のフローチャート`} role="group">
     <defs><marker id="arrowhead" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#778794" /></marker></defs>
     {page.edges.map(edge => {
-      const points = edgePoints(page, edge), a = points[0], b = points[1];
+      const points = edgePoints(page, edge), labelPosition = edgeLabelPosition(page, edge);
       const target = page.nodes.find(n => n.id === edge.target)!;
-      const horizontal = Math.abs(a.x - b.x) > 1;
       return <g key={edge.id}>
         <polyline points={points.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke="#778794" strokeWidth="1.5" markerEnd={target.kind === 'junction' ? undefined : 'url(#arrowhead)'} />
-        {edge.label && <text x={horizontal ? a.x + 18 : a.x + 12} y={horizontal ? a.y - 10 : a.y + 25} className={s.edgeLabel}>{edge.label}</text>}
+        {edge.label && <text x={labelPosition.x} y={labelPosition.y} textAnchor={labelPosition.anchor} className={s.edgeLabel}>{edge.label}</text>}
       </g>;
     })}
     {page.nodes.filter(n => n.kind !== 'junction').map(node => {
