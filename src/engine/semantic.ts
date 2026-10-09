@@ -20,6 +20,15 @@ export function call(n: Node): { name: string; args: Node[] } | null {
 export interface Meaning { kind: Shape; label: string; merge?: boolean; prompt?: string; input?: boolean; seed?: 'rand' | 'random'; random?: 'rand' | 'random' }
 type Builtin = (name: string) => boolean;
 
+// Keep the operation's role regardless of whether its value is ignored, assigned or returned.
+export function callRole(c: NonNullable<ReturnType<typeof call>>, builtin: Builtin): Shape {
+  if (!builtin(c.name)) return 'subroutine';
+  if (['printf', 'puts', 'putchar'].includes(c.name)) return 'display';
+  if (['scanf', 'getchar'].includes(c.name) || (c.name === 'fgets' && t(c.args[2] ?? null) === 'stdin')) return 'input';
+  if (['fopen', 'fclose', 'fread', 'fwrite', 'fprintf', 'fscanf', 'fgets', 'fputs', 'fgetc', 'fputc', 'fflush'].includes(c.name)) return 'file';
+  return 'subroutine';
+}
+
 function stringValue(n?: Node): string | null {
   if (!n || n.type !== 'string_literal' || !/^"(?:[^"\\]|\\[nrt\\"])*"$/.test(n.text)) return null;
   return n.text.slice(1, -1).replace(/\\([nrt\\"])/g, (_, c: string) => ({ n: '\n', r: '\r', t: '\t', '\\': '\\', '"': '"' })[c]!);
@@ -54,7 +63,9 @@ function assignment(n: Node): { target: Node; value: Node } | null {
     const declarators = Array.from({ length: n.childCount }, (_, i) => n.fieldNameForChild(i)).filter(name => name === 'declarator');
     if (initializers.length !== 1 || declarators.length > 1 || named(n).some(c => c.type === 'storage_class_specifier' || c.type === 'type_qualifier')) return null;
     n = initializers[0];
-    const target = f(n, 'declarator'), value = f(n, 'value');
+    let target = f(n, 'declarator');
+    const value = f(n, 'value');
+    while (target?.type === 'pointer_declarator') target = f(target, 'declarator');
     return target?.type === 'identifier' && value ? { target, value } : null;
   }
   if (n.type === 'assignment_expression' && t(f(n, 'operator')) === '=') {
@@ -88,7 +99,7 @@ export function condition(n: Node): string {
     const suffix: Record<string, string> = { '<=': '以下', '>=': '以上', '<': '未満', '>': 'より大きい', '==': 'と等しい', '!=': 'と等しくない' };
     if (suffix[op]) return `${left}が${right}${suffix[op]}`;
   }
-  return n.text;
+  return `${n.text}が真`;
 }
 export function summarize(node: Node, builtin: Builtin): Meaning {
   const n = expr(node), c = call(n);
@@ -98,7 +109,7 @@ export function summarize(node: Node, builtin: Builtin): Meaning {
       if (c.name === 'scanf') return input(c) ?? { kind: 'input', label: `${n.text}\nで入力` };
       if (c.name === 'getchar') return { kind: 'input', label: '1文字を入力' };
       if (['srand', 'srandom'].includes(c.name) && c.args.length === 1) return { kind: 'process', label: '乱数の生成を初期化', seed: c.name === 'srand' ? 'rand' : 'random' };
-      if (['fopen', 'fclose', 'fread', 'fwrite', 'fprintf', 'fscanf', 'fgets', 'fputs', 'fgetc', 'fputc', 'fflush'].includes(c.name)) return { kind: 'file', label: n.text };
+      if (['file', 'input'].includes(callRole(c, builtin))) return { kind: callRole(c, builtin), label: n.text };
     }
     return { kind: 'subroutine', label: `${n.text}を呼び出す` };
   }
@@ -107,7 +118,7 @@ export function summarize(node: Node, builtin: Builtin): Meaning {
     const r = randomRange(a.value, builtin);
     if (r) return { kind: 'process', label: `${r.lower}〜${r.upper}の乱数を\n${a.target.text}に代入`, random: r.family };
     const assignedCall = call(a.value);
-    if (assignedCall) return { kind: 'subroutine', label: `${a.value.text}の結果を\n${a.target.text}に代入` };
+    if (assignedCall) return { kind: callRole(assignedCall, builtin), label: `${a.value.text}の結果を\n${a.target.text}に代入` };
     return { kind: 'process', label: `${a.target.text}を${a.value.text}とする`, merge: !containsCall(a.value) && a.target.type === 'identifier' };
   }
   if (n.type === 'update_expression') {

@@ -1,5 +1,5 @@
 import type { Node as SyntaxNode } from 'web-tree-sitter';
-import { summarize, condition, simpleDeclaration, containsCall, type Meaning } from './semantic';
+import { summarize, condition, simpleDeclaration, containsCall, call, callRole, type Meaning } from './semantic';
 import type { Conversion, Diagnostic, FlowEdge, FlowNode, FlowPage, Shape, SourceRange } from './types';
 
 const WIDTH = 240;
@@ -188,7 +188,7 @@ class Builder {
       const isDo = node.type === 'do_statement';
       const depth = (loop?.depth ?? 0) + 1;
       const returnLane = x - 48 - (this.maxLoopDepth - depth) * 40;
-      const start = this.add('loopStart', isDo ? '繰り返し開始' : cond ? `${condition(cond)}${/(以下|以上|未満)$/.test(condition(cond)) ? 'の間' : '間'}、繰り返す` : '常に繰り返す', x, y, cond ?? node); this.connect(tails, start);
+      const start = this.add('loopStart', isDo ? '繰り返し開始' : cond ? `${condition(cond)}${/(以下|以上|未満|真)$/.test(condition(cond)) ? 'の間' : '間'}、繰り返す` : '常に繰り返す', x, y, cond ?? node); this.connect(tails, start);
       const finish = this.add('loopEnd', isDo ? cond ? `${condition(cond)}なら繰り返す` : '' : '繰り返し終了', x, 0, isDo ? cond ?? node : undefined);
       const conditionIssue = cond ? cond.hasError ? '条件式の構文を確定できません。' : this.unsafe(cond) : undefined;
       if (conditionIssue && cond) this.diagnose(isDo ? finish : start, cond, conditionIssue);
@@ -219,7 +219,8 @@ class Builder {
     if (node.type === 'return_statement') {
       const unsafe = this.unsafe(node); if (unsafe) return this.unknown(node, x, y, tails, unsafe);
       const value = children(node)[0];
-      const n = this.add('process', value ? `${text(value)} を返す` : '関数から戻る', x, y, node); this.connect(tails, n); this.returns.push(n);
+      const returnedCall = value ? call(value) : null;
+      const n = this.add(returnedCall ? callRole(returnedCall, this.isBuiltin) : 'process', returnedCall ? `${text(value)}の結果を返す` : value ? `${text(value)} を返す` : '関数から戻る', x, y, node); this.connect(tails, n); this.returns.push(n);
       return { tails: [], y: y + n.h + GAP };
     }
     if (node.type === 'declaration' || node.type === 'expression_statement') {
