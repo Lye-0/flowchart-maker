@@ -1,0 +1,61 @@
+// Optional network integration test. Only generated sample diagrams are sent to draw.io.
+import { chromium } from '@playwright/test';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import assert from 'node:assert/strict';
+
+await mkdir('test-results', { recursive: true });
+const browser = await chromium.launch({ channel: 'msedge', headless: true });
+try {
+  const page = await browser.newPage({ viewport: { width: 1400, height: 1100 } });
+  await page.route('http://127.0.0.1:5173/drawio-qa', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><body style="margin:0"><iframe id="editor" style="width:100vw;height:100vh;border:0"></iframe><script>window.events=[];addEventListener("message",e=>{if(e.origin==="https://embed.diagrams.net"){try{window.events.push(JSON.parse(e.data))}catch{}}});document.querySelector("iframe").src="https://embed.diagrams.net/?embed=1&proto=json&spin=1&libraries=0&lang=en&ui=kennedy";</script></body></html>' }));
+  await page.goto('http://127.0.0.1:5173/drawio-qa');
+  await page.waitForFunction(() => window.events.some(e => e.event === 'init'), { timeout: 45000 });
+  const xml = await readFile('test-results/even-odd.drawio', 'utf8');
+  const send = action => page.evaluate(action => document.querySelector('iframe').contentWindow.postMessage(JSON.stringify(action), 'https://embed.diagrams.net'), action);
+  await send({ action: 'load', xml, title: 'Integration verification', autosave: 1, fit: 1 });
+  await page.waitForFunction(() => window.events.some(e => e.event === 'load'), { timeout: 30000 });
+  await send({ action: 'export', format: 'svg', spin: 'Verifying export' });
+  await page.waitForFunction(() => window.events.some(e => e.event === 'export'), { timeout: 30000 });
+  const exported = await page.evaluate(() => window.events.find(e => e.event === 'export'));
+  assert(exported.data?.startsWith('data:image/svg+xml')); assert(!exported.error);
+  const svg = Buffer.from(exported.data.split(',')[1], 'base64').toString('utf8');
+  assert(svg.includes('開始')); assert(svg.includes('終了'));
+  await writeFile('test-results/drawio-rendered.svg', svg);
+  await page.screenshot({ path: 'test-results/drawio-import.png', fullPage: true });
+  const frame = page.frames().find(f => f.url().startsWith('https://embed.diagrams.net'));
+  assert(frame);
+  const start = frame.getByText('開始', { exact: true });
+  await start.first().dblclick();
+  await page.keyboard.press('Control+a');
+  await page.keyboard.type('Edited start');
+  await page.keyboard.press('Control+Enter');
+  await page.keyboard.press('Escape');
+  await frame.getByText('Edited start', { exact: true }).first().click();
+  await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(() => window.events.some(e => {
+    if (e.event !== 'autosave' || !e.xml?.includes('Edited start')) return false;
+    const doc = new DOMParser().parseFromString(e.xml, 'application/xml');
+    const moved = doc.querySelector('object[label="Edited start"] mxGeometry');
+    return moved && moved.getAttribute('x') !== '120';
+  }), { timeout: 15000 });
+  const saved = await page.evaluate(() => window.events.filter(e => e.event === 'autosave').at(-1).xml);
+  await writeFile('test-results/drawio-resaved.drawio', saved);
+  await send({ action: 'export', format: 'svg' });
+  await page.waitForFunction(() => window.events.filter(e => e.event === 'export').length >= 2);
+  const after = await page.evaluate(() => window.events.filter(e => e.event === 'export').at(-1));
+  assert(Buffer.from(after.data.split(',')[1], 'base64').toString('utf8').includes('Edited start'));
+  const symbols = await readFile('test-results/all-symbols.drawio', 'utf8');
+  await page.evaluate(() => { window.events = []; });
+  await send({ action: 'load', xml: symbols, title: 'All symbols', fit: 1 });
+  await page.waitForFunction(() => window.events.some(e => e.event === 'load'));
+  await frame.getByText('main', { exact: true }).first().click();
+  await send({ action: 'export', format: 'svg' });
+  await page.waitForFunction(() => window.events.some(e => e.event === 'export'));
+  const symbolSvg = await page.evaluate(() => window.events.find(e => e.event === 'export'));
+  const rendered = Buffer.from(symbolSvg.data.split(',')[1], 'base64').toString('utf8');
+  assert(rendered.includes('繰り返し終了')); assert(rendered.includes('fputs')); assert(rendered.includes('show()'));
+  await writeFile('test-results/all-symbols-rendered.svg', rendered);
+  await page.screenshot({ path: 'test-results/all-symbols-import.png', fullPage: true });
+  await writeFile('test-results/drawio-smoke.json', JSON.stringify({ passed: true, checks: ['native XML import', 'custom stencil rendering', 'SVG export', 'edit label', 'move shape', 'autosave round trip'] }, null, 2));
+  console.log('draw.io integration passed: import, render all symbols, edit, move, re-save.');
+} finally { await browser.close(); }
