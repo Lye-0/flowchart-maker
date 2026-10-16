@@ -40,7 +40,7 @@ export function wrapLabel(label: string, max = 26): string[] {
   return lines;
 }
 type Tail = { id: string; label?: string };
-interface LoopContext { breakId: string; continueId: string; breakLane: number; continueLane: number; depth: number }
+interface LoopContext { breakId: string; continueId: string; breakLane: number; leftBreakX: number; leftBreakLane: number; continueLane: number; depth: number }
 
 class Builder {
   nodes: FlowNode[] = [];
@@ -58,7 +58,7 @@ class Builder {
   add(kind: Shape, label: string, x: number, y: number, source?: SyntaxNode) {
     if (this.count >= 1200) throw new Error('図形が多すぎます。関数やコードを分割して変換してください。');
     const lines = wrapLabel(label, kind === 'decision' ? 22 : 26);
-    const h = kind === 'junction' ? 2 : Math.max(kind === 'decision' ? 112 : 64, lines.length * 20 + (kind === 'decision' ? 58 : 28));
+    const h = kind === 'junction' ? 2 : Math.max(kind === 'decision' ? 112 : 64, kind === 'decision' ? lines.length * 40 + 80 : lines.length * 20 + 28);
     const node: FlowNode = { id: `n${++this.count}`, kind, label, x, y, w: kind === 'junction' ? 2 : WIDTH, h, range: source ? range(source) : undefined, sourceText: source?.text };
     this.nodes.push(node); return node;
   }
@@ -198,14 +198,13 @@ class Builder {
       const updateIssue = update ? update.hasError ? '更新式の構文を確定できません。' : this.unsafe(update) : undefined;
       if (updateIssue && increment && update) this.diagnose(increment, update, updateIssue);
       const continueTarget = increment ?? finish;
-      const result = this.statement(body, x, y + start.h + GAP, [{ id: start.id, label: !isDo && cond ? 'Yes' : undefined }], { breakId: after.id, continueId: continueTarget.id, continueLane: returnLane + 20, breakLane: x + span(body) + 105, depth });
+      const result = this.statement(body, x, y + start.h + GAP, [{ id: start.id }], { breakId: after.id, leftBreakX: x, leftBreakLane: returnLane - 20, continueId: continueTarget.id, continueLane: returnLane + 20, breakLane: x + span(body) + 105, depth });
       let bottom = result.y;
       if (increment) { increment.y = bottom; this.connect(result.tails, increment); bottom += increment.h + GAP; }
       finish.y = bottom; this.connect(increment ? updateIssue ? [] : [{ id: increment.id }] : result.tails, finish);
-      this.edge(finish.id, start.id, { label: isDo ? 'Yes' : undefined, from: 'left', to: 'left', via: [{ x: returnLane, y: finish.y + finish.h / 2 }, { x: returnLane, y: start.y + start.h / 2 }] });
+      // Paired loop symbols express repetition implicitly. Their lower exit is normal completion.
       after.y = bottom + finish.h + GAP;
-      if (isDo && !constantTrue(cond)) this.edge(finish.id, after.id, { label: 'No' });
-      else if (!isDo && cond && !constantTrue(cond)) this.edge(start.id, after.id, { label: 'No', from: 'right', to: 'right', via: [{ x: x + span(body) + 145, y: start.y + start.h / 2 }, { x: x + span(body) + 145, y: after.y + 1 }] });
+      if (cond && !conditionIssue && !constantTrue(cond)) this.edge(finish.id, after.id);
       // Infinite loops have a continuation only when a break can reach it.
       const exits = this.edges.some(e => e.target === after.id);
       return { tails: exits ? [{ id: after.id }] : [], y: after.y + GAP / 2 };
@@ -213,6 +212,11 @@ class Builder {
     if (node.type === 'break_statement' || node.type === 'continue_statement') {
       if (!loop) return this.unknown(node, x, y, tails, '対応するループを特定できません。');
       const n = this.add('process', node.type === 'break_statement' ? 'ループを抜ける' : '次の繰り返しへ', x, y, node); this.connect(tails, n);
+      // A break in the loop's main column can leave on the left without crossing its branches.
+      if (node.type === 'break_statement' && x === loop.leftBreakX) {
+        this.edge(n.id, loop.breakId, { from: 'left', to: 'left', via: [{ x: loop.leftBreakLane, y: n.y + n.h / 2 }] });
+        return { tails: [], y: y + n.h + GAP };
+      }
       this.edge(n.id, node.type === 'break_statement' ? loop.breakId : loop.continueId, { from: node.type === 'break_statement' ? 'right' : 'left', to: node.type === 'break_statement' ? 'right' : 'top', via: [{ x: node.type === 'break_statement' ? loop.breakLane : loop.continueLane, y: n.y + n.h / 2 }] });
       return { tails: [], y: y + n.h + GAP };
     }
@@ -261,7 +265,7 @@ class Builder {
     for (const e of this.edges) {
       if (e.via?.length === 1) {
         const target = this.nodes.find(n => n.id === e.target)!;
-        if (e.to === 'right') e.via.push({ x: e.via[0].x, y: target.y + target.h / 2 });
+        if (e.to === 'right' || e.to === 'left') e.via.push({ x: e.via[0].x, y: target.y + target.h / 2 });
         else if (e.to === 'top') e.via.push({ x: e.via[0].x, y: target.y - 24 }, { x: target.x + target.w / 2, y: target.y - 24 });
       }
     }

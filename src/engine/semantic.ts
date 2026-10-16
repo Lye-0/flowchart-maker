@@ -33,6 +33,7 @@ function stringValue(n?: Node): string | null {
   if (!n || n.type !== 'string_literal' || !/^"(?:[^"\\]|\\[nrt\\"])*"$/.test(n.text)) return null;
   return n.text.slice(1, -1).replace(/\\([nrt\\"])/g, (_, c: string) => ({ n: '\n', r: '\r', t: '\t', '\\': '\\', '"': '"' })[c]!);
 }
+function outputEffect(n: Node): boolean { return ['call_expression', 'update_expression', 'assignment_expression'].includes(n.type) || named(n).some(outputEffect); }
 function output(c: NonNullable<ReturnType<typeof call>>): Meaning | null {
   if (c.name === 'putchar' && c.args.length === 1) return { kind: 'display', label: `${t(c.args[0])}を1文字表示` };
   const format = stringValue(c.args[0]);
@@ -43,7 +44,16 @@ function output(c: NonNullable<ReturnType<typeof call>>): Meaning | null {
     const label = format.replace(/[\r\n]+$/, '');
     return { kind: 'display', label: label ? `「${label}」を表示` : '改行を表示', prompt: /[:：?？]\s*$/.test(format) ? format : undefined };
   }
-  if (/^%[diuoxXfFeEgGaAcsp]\s*$/.test(format) && c.args.length === 2 && !containsCall(c.args[1])) return { kind: 'display', label: `${t(c.args[1])}を表示` };
+  if (/^%[diuoxXfFeEgGaAcsp]\s*$/.test(format) && c.args.length === 2 && !outputEffect(c.args[1])) return { kind: 'display', label: `${t(c.args[1])}を表示` };
+  // Substitute only simple, side-effect-free arguments; retain unsupported formats verbatim.
+  let index = 1, valid = true;
+  const rendered = format.replace(/%%|%[-+ #0]*\d*(?:\.\d+)?(?:hh|ll|[hljztL])?[diuoxXfFeEgGaAcsp]|%/g, spec => {
+    if (spec === '%%') return '%';
+    const arg = c.args[index++];
+    if (spec === '%' || !arg || outputEffect(arg)) { valid = false; return spec; }
+    return '〈' + arg.text + '〉';
+  });
+  if (valid && index === c.args.length) return { kind: 'display', label: '「' + rendered.replace(/[\r\n]+$/, '') + '」を表示' };
   return null;
 }
 function input(c: NonNullable<ReturnType<typeof call>>): Meaning | null {
@@ -97,6 +107,16 @@ export function condition(n: Node): string {
   if (n.type === 'binary_expression') {
     const left = t(f(n, 'left')), right = t(f(n, 'right')), op = t(f(n, 'operator'));
     const suffix: Record<string, string> = { '<=': '以下', '>=': '以上', '<': '未満', '>': 'より大きい', '==': 'と等しい', '!=': 'と等しくない' };
+    if (op === '&&' || op === '||') {
+      const leftNode = f(n, 'left')!, rightNode = f(n, 'right')!;
+      const part = (child: Node) => {
+        const value = unparen(child);
+        const childOp = t(f(value, 'operator'));
+        const label = condition(value);
+        return (childOp === '&&' || childOp === '||') && childOp !== op ? '（' + label + '）' : label;
+      };
+      return part(leftNode) + '\n' + (op === '&&' ? 'かつ' : 'または') + '\n' + part(rightNode);
+    }
     if (suffix[op]) return `${left}が${right}${suffix[op]}`;
   }
   return `${n.text}が真`;

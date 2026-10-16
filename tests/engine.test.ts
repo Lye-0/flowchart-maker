@@ -77,7 +77,8 @@ describe('Cからの制御フロー', () => {
     const p = convert('int main(){int n=0; do { n++; } while(n<3); return n;}').pages[0];
     const start = p.nodes.find(n => n.kind === 'loopStart')!, end = p.nodes.find(n => n.kind === 'loopEnd')!, body = p.nodes.find(n => n.label.includes('1増やす'))!;
     expect(body.y).toBeLessThan(end.y); expect(start.label).not.toContain('n<3'); expect(end.sourceText).toContain('n<3');
-    expect(p.edges.find(e => e.source === end.id && e.target === start.id)?.label).toBe('Yes');
+    expect(p.edges.some(e => e.source === end.id && e.target === start.id)).toBe(false);
+    expect(p.edges.filter(e => e.source === end.id)).toHaveLength(1);
   });
   it('入れ子のbreakは内側ループだけを抜ける', () => {
     const p = convert('int main(){for(int i=0;i<3;i++){while(i<2){break;} i++;}return 0;}').pages[0];
@@ -242,5 +243,37 @@ describe('意味単位の要約と局所的な未解決', () => {
     const raw=r.source.slice(p.range!.start,p.range!.end);
     expect(raw).toContain('printf'); expect(raw).toContain('scanf');
     expect(toDrawio(r)).toContain('sourceCode=');
+  });
+});
+
+describe('ループ記号と表示内容の回帰確認', () => {
+  it('数当てのループは終了記号の下へ抜け、breakは更新を飛ばす', () => {
+    const r = convert(readFileSync('tests/fixtures/guessing-game.c','utf8')), p=r.pages[0];
+    expect(r.diagnostics).toEqual([]);
+    const start=p.nodes.find(n=>n.kind==='loopStart')!, finish=p.nodes.find(n=>n.kind==='loopEnd')!;
+    const br=p.nodes.find(n=>n.sourceText==='break;')!;
+    const exit=p.edges.find(e=>e.source===finish.id)!;
+    expect(exit).toMatchObject({from:'bottom',to:'top'});
+    expect(p.edges.some(e=>e.source===finish.id&&e.target===start.id)).toBe(false);
+    expect(p.edges.filter(e=>e.source===start.id)).toHaveLength(1);
+    expect(p.edges.find(e=>e.source===br.id)).toMatchObject({target:exit.target,from:'left'});
+    expect(p.nodes.some(n=>n.label==='「〈i〉回目の挑戦」を表示')).toBe(true);
+    expect(p.nodes.some(n=>n.label==='「正解: 〈num〉」を表示')).toBe(true);
+    expect(p.nodes.filter(n=>n.kind==='decision').slice(1).every(n=>n.label.includes('\nかつ\n'))).toBe(true);
+    mkdirSync('.verification-report/ex2',{recursive:true});
+    writeFileSync('.verification-report/ex2/fixed.drawio',toDrawio(r));
+    writeFileSync('.verification-report/ex2/graph.json',JSON.stringify(r,null,2));
+  });
+  it('whileの通常終了も下へ接続する',()=>{
+    const p=convert('int main(){int i=0;while(i<3){i++;}return 0;}').pages[0];
+    const end=p.nodes.find(n=>n.kind==='loopEnd')!;
+    expect(p.edges.filter(e=>e.source===end.id)).toHaveLength(1);
+    expect(p.edges.find(e=>e.source===end.id)).toMatchObject({from:'bottom',to:'top'});
+  });
+  it('未対応の書式と副作用を含む表示は原式を保持する',()=>{
+    for(const code of ['printf("%*d",3,4);','printf("%d",i++);']){
+      const p=convert('#include <stdio.h>\nint main(){int i=0;'+code+'}').pages[0];
+      expect(p.nodes.find(n=>n.kind==='display')!.label).toContain('printf');
+    }
   });
 });
