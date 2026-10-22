@@ -41,8 +41,6 @@ jobs:
           node-version: ${{ steps.runtime.outputs.version }}
           cache: npm
 
-      - name: Use npm 11.21.1
-        run: npm install --global npm@11.21.1
       - name: Install locked dependencies
         run: npm ci
 
