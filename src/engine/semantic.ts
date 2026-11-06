@@ -84,18 +84,19 @@ function assignment(n: Node): { target: Node; value: Node } | null {
   }
   return null;
 }
-function randomRange(n: Node, builtin: Builtin): { lower: number; upper: number; family: 'rand' | 'random' } | null {
+function randomRange(n: Node, builtin: Builtin, constants: Map<string, number>): { lower: number; upper: number; family: 'rand' | 'random' } | null {
   n = unparen(n);
+  const integer = (value: Node) => { const v = unparen(value); return v.type === 'identifier' ? constants.get(v.text) : /^(?:0|[1-9][0-9]*)$/.test(v.text) ? Number(v.text) : undefined; };
   let lower = 0;
   if (n.type === 'binary_expression' && t(f(n, 'operator')) === '+') {
     const right = f(n, 'right');
-    if (!right || !/^\d+$/.test(right.text)) return null;
-    lower = Number(right.text); n = unparen(f(n, 'left')!);
+    if (!right || integer(right) === undefined) return null;
+    lower = integer(right)!; n = unparen(f(n, 'left')!);
   }
   if (n.type !== 'binary_expression' || t(f(n, 'operator')) !== '%') return null;
   const right = f(n, 'right'), left = f(n, 'left');
-  if (!right || !left || !/^[1-9]\d*$/.test(right.text)) return null;
-  const c = call(left), modulus = Number(right.text);
+  if (!right || !left || integer(right) === undefined || integer(right)! <= 0) return null;
+  const c = call(left), modulus = integer(right)!;
   if (!c || !['rand', 'random'].includes(c.name) || c.args.length || !builtin(c.name)) return null;
   // Only summarize ranges guaranteed by each library's minimum specified range.
   const max = c.name === 'random' ? 2147483647 : 32767;
@@ -121,7 +122,7 @@ export function condition(n: Node): string {
   }
   return `${n.text}が真`;
 }
-export function summarize(node: Node, builtin: Builtin): Meaning {
+export function summarize(node: Node, builtin: Builtin, constants = new Map<string, number>()): Meaning {
   const n = expr(node), c = call(n);
   if (c) {
     if (builtin(c.name)) {
@@ -135,7 +136,7 @@ export function summarize(node: Node, builtin: Builtin): Meaning {
   }
   const a = assignment(node);
   if (a) {
-    const r = randomRange(a.value, builtin);
+    const r = randomRange(a.value, builtin, constants);
     if (r) return { kind: 'process', label: `${r.lower}〜${r.upper}の乱数を\n${a.target.text}に代入`, random: r.family };
     const assignedCall = call(a.value);
     if (assignedCall) return { kind: callRole(assignedCall, builtin), label: `${a.value.text}の結果を\n${a.target.text}に代入` };

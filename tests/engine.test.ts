@@ -277,3 +277,40 @@ describe('ループ記号と表示内容の回帰確認', () => {
     }
   });
 });
+
+describe('数値define',()=>{
+ it('ランキングプログラムの4関数と乱数範囲を解決して元コードを保持',()=>{
+ const code=readFileSync('tests/fixtures/ranking-defines.c','utf8'),r=convert(code);
+ expect(r.diagnostics).toEqual([]);expect(r.pages.map(p=>p.name)).toEqual(['main','update_ranking','print_ranking','get_ranking']);
+ expect(r.pages.flatMap(p=>p.nodes).some(n=>n.kind==='unknown'||n.unresolved)).toBe(false);
+ expect(r.pages[0].nodes.some(n=>n.label.includes('1〜128の乱数'))).toBe(true);
+ expect(r.pages[2].nodes.find(n=>n.kind==='loopStart')?.label).toContain('RANKING_SIZE = 15');
+ expect(r.pages[1].nodes.find(n=>n.sourceText?.includes('RANKING_SIZE-1'))?.label).toContain('RANKING_SIZE = 15');
+ expect(toDrawio(r)).toContain('NUM_RANGE+1');
+ mkdirSync('.verification-report/defines',{recursive:true});writeFileSync('.verification-report/defines/ranking.drawio',toDrawio(r));
+ });
+ it('コメントと括弧付き整数の定義を使える',()=>{
+ const r=convert('#define N (15) /* size */\nint main(){for(int i=0;i<N;i++){}return 0;}');
+ expect(r.diagnostics).toEqual([]);expect(r.pages[0].nodes.find(n=>n.kind==='loopStart')?.label).toContain('N = 15');
+ });
+ it('定数を使う無限ループに出口を作らない',()=>{
+ const r=convert('#define ALWAYS 1\nint main(){while(ALWAYS){}return 0;}'),p=r.pages[0];
+ expect(r.diagnostics).toEqual([]);expect(p.edges.some(e=>e.target===p.nodes.find(n=>n.label==='終了')!.id)).toBe(false);
+ });
+ it.each([
+ '#define N 3\n#undef N\n',
+ '#define N 3\n#define N 4\n',
+ '#ifdef FLAG\n#define N 3\n#endif\n',
+ '#define N M\n#define M 3\n',
+ '#define N (2+1)\n',
+ '#define N 08\n',
+ '#define N 2147483648\n',
+ ])('不確定または未対応の定義は空白と診断にする: %s',prefix=>{
+ const r=convert(prefix+'int main(){if(N){return 1;}return 0;}');expect(r.diagnostics.length).toBeGreaterThan(0);expect(r.pages.at(-1)!.nodes.find(n=>n.kind==='decision')?.label).toBe('');
+ });
+ it('関数より後の定義は先取りしない',()=>{expect(convert('int main(){if(N)return 1;}\n#define N 3\n').diagnostics.length).toBeGreaterThan(0);});
+ it('関数形式マクロと標準関数を置き換える定義は推測しない',()=>{
+ expect(convert('#define N(x) x\nint main(){return N(1);}').diagnostics).toHaveLength(1);
+ expect(convert('#include <stdio.h>\n#define printf 3\nint main(){printf("x");}').diagnostics.length).toBeGreaterThan(0);
+ });
+});

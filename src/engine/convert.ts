@@ -14,10 +14,11 @@ function functionName(node: SyntaxNode): string {
   while (n && n.type !== 'identifier') n = field(n, 'declarator') ?? n.namedChildren[0] ?? null;
   return n?.text ?? 'function';
 }
-function constantTrue(node: SyntaxNode | null): boolean {
+function constantTrue(node: SyntaxNode | null, constants = new Map<string, number>()): boolean {
   if (!node) return true;
   let n = node;
   while (n.type === 'parenthesized_expression' && children(n).length === 1) n = children(n)[0];
+  if (n.type === 'identifier' && constants.has(n.text)) return constants.get(n.text) !== 0;
   return n.type === 'number_literal' && /^(?:[1-9][0-9]*|0[xX][0-9a-fA-F]+)[uUlL]*$/.test(n.text) && Number.parseInt(n.text) !== 0;
 }
 function span(node: SyntaxNode | null): number {
@@ -50,13 +51,18 @@ class Builder {
   end: FlowNode;
   returns: FlowNode[] = [];
   shadowed = new Set<string>();
-  constructor(public name: string, public diagnostics: Diagnostic[], private functions: Set<string>, private macros: Set<string>, private headers: Set<string>, width: number) {
+  constructor(public name: string, public diagnostics: Diagnostic[], private functions: Set<string>, private macros: Set<string>, private headers: Set<string>, width: number, private constants = new Map<string, number>()) {
     this.end = this.add('terminal', '終了', 120, 0);
     this.outerLane = width + 280;
   }
   outerLane: number;
   add(kind: Shape, label: string, x: number, y: number, source?: SyntaxNode) {
     if (this.count >= 1200) throw new Error('図形が多すぎます。関数やコードを分割して変換してください。');
+    if (source && label) {
+      const used = new Set<string>();
+      walk(source, n => { if (n.type === 'identifier' && this.constants.has(n.text) && label.includes(n.text)) used.add(n.text); });
+      if (used.size) label += '\n' + [...used].map(name => `${name} = ${this.constants.get(name)}`).join('、');
+    }
     const lines = wrapLabel(label, kind === 'decision' ? 22 : 26);
     const h = kind === 'junction' ? 2 : Math.max(kind === 'decision' ? 112 : 64, kind === 'decision' ? lines.length * 40 + 80 : lines.length * 20 + 28);
     const node: FlowNode = { id: `n${++this.count}`, kind, label, x, y, w: kind === 'junction' ? 2 : WIDTH, h, range: source ? range(source) : undefined, sourceText: source?.text };
@@ -96,7 +102,7 @@ class Builder {
         this.end.range = range(child); this.end.sourceText = child.text; continue;
       }
       if (safe && ['declaration', 'expression_statement'].includes(child.type)) {
-        let meaning = summarize(child, this.isBuiltin);
+        let meaning = summarize(child, this.isBuiltin, this.constants);
         const sources = [child];
         // Combine only adjacent tasks within the same block. Never cross control flow or uncertain code.
         let j = i + 1;
@@ -104,7 +110,7 @@ class Builder {
         while (j < statements.length && simpleDeclaration(statements[j]) && !statements[j].hasError && !this.unsafe(statements[j])) { skipped.push(statements[j]); j++; }
         const next = statements[j];
         if (next && !next.hasError && !this.unsafe(next) && ['declaration', 'expression_statement'].includes(next.type)) {
-          const other = summarize(next, this.isBuiltin);
+          const other = summarize(next, this.isBuiltin, this.constants);
           if (meaning.seed && other.random === meaning.seed) {
             meaning = { kind: 'process', label: '乱数を初期化し、\n' + other.label };
             sources.push(...skipped, next); i = j;
@@ -126,10 +132,11 @@ class Builder {
   unsafe(node: SyntaxNode): string | null {
     let reason: string | null = null;
     walk(node, n => {
-      if (n.type === 'identifier' && this.macros.has(n.text)) reason = `マクロ「${n.text}」の展開結果を確定できません。後続への接続を保留しました。`;
+      if (n.type === 'identifier' && !this.constants.has(n.text) && this.macros.has(n.text)) reason = `マクロ「${n.text}」の展開結果を確定できません。後続への接続を保留しました。`;
       if (n.type === 'call_expression') {
         const name = text(field(n, 'function'));
-        if (this.shadowed.has(name)) reason = `「${name}」はローカル変数・引数と同名のため、呼び出し先を確定できません。`;
+        if (this.macros.has(name)) reason = 'マクロによる関数名の置換には未対応です。';
+        else if (this.shadowed.has(name)) reason = `「${name}」はローカル変数・引数と同名のため、呼び出し先を確定できません。`;
         else if (['exit', '_Exit', 'abort', 'longjmp', 'setjmp'].includes(name)) reason = `「${name}」による制御の移動には未対応です。`;
         else if (!this.functions.has(name) && !this.knownLibrary(name)) reason = `呼び出し先「${name}」を確定できません。マクロ・関数ポインタなどの可能性があるため空白にしました。`;
       }
@@ -183,7 +190,7 @@ class Builder {
       if (initializer) {
         const issue = initializer.hasError ? '初期化式の構文を確定できません。' : this.unsafe(initializer);
         if (issue) { const result = this.unknown(initializer, x, y, tails, issue); tails = result.tails; y = result.y; }
-        else if (!simpleDeclaration(initializer)) { const result = this.renderMeaning(summarize(initializer, this.isBuiltin), [initializer], x, y, tails); tails = result.tails; y = result.y; }
+        else if (!simpleDeclaration(initializer)) { const result = this.renderMeaning(summarize(initializer, this.isBuiltin, this.constants), [initializer], x, y, tails); tails = result.tails; y = result.y; }
       }
       const isDo = node.type === 'do_statement';
       const depth = (loop?.depth ?? 0) + 1;
@@ -194,7 +201,7 @@ class Builder {
       if (conditionIssue && cond) this.diagnose(isDo ? finish : start, cond, conditionIssue);
       if (isDo && !cond) this.diagnose(finish, node, 'ループ終了条件を確定できません。');
       const after = this.add('junction', '', x + WIDTH / 2 - 1, 0);
-      const increment = update ? this.add('process', summarize(update, this.isBuiltin).label, x, 0, update) : null;
+      const increment = update ? this.add('process', summarize(update, this.isBuiltin, this.constants).label, x, 0, update) : null;
       const updateIssue = update ? update.hasError ? '更新式の構文を確定できません。' : this.unsafe(update) : undefined;
       if (updateIssue && increment && update) this.diagnose(increment, update, updateIssue);
       const continueTarget = increment ?? finish;
@@ -204,7 +211,7 @@ class Builder {
       finish.y = bottom; this.connect(increment ? updateIssue ? [] : [{ id: increment.id }] : result.tails, finish);
       // Paired loop symbols express repetition implicitly. Their lower exit is normal completion.
       after.y = bottom + finish.h + GAP;
-      if (cond && !conditionIssue && !constantTrue(cond)) this.edge(finish.id, after.id);
+      if (cond && !conditionIssue && !constantTrue(cond, this.constants)) this.edge(finish.id, after.id);
       // Infinite loops have a continuation only when a break can reach it.
       const exits = this.edges.some(e => e.target === after.id);
       return { tails: exits ? [{ id: after.id }] : [], y: after.y + GAP / 2 };
@@ -231,7 +238,7 @@ class Builder {
       if (!children(node).length) return { tails, y };
       const unsafe = this.unsafe(node); if (unsafe) return this.unknown(node, x, y, tails, unsafe);
       if (simpleDeclaration(node)) return { tails, y };
-      return this.renderMeaning(summarize(node, this.isBuiltin), [node], x, y, tails);
+      return this.renderMeaning(summarize(node, this.isBuiltin, this.constants), [node], x, y, tails);
     }
     return this.unknown(node, x, y, tails, `「${node.type}」には未対応です。この範囲を空白にし、後続への接続を保留しました。`);
   }
@@ -288,10 +295,36 @@ export function convertTree(root: SyntaxNode, source: string): Conversion {
     }
     if (n.type === 'declaration') for (const d of children(n)) if (d.type === 'function_declarator') { const id = field(d, 'declarator'); if (id?.type === 'identifier') functions.add(id.text); }
   }
+  // Accept only unique, unconditional top-level numeric definitions preceding the function.
+  // Redefinitions and undef (including nested/conditional ones) invalidate that name conservatively.
+  const definitions = new Map<string, SyntaxNode[]>(), invalidated = new Set<string>();
+  walk(root, n => {
+    if (['preproc_def', 'preproc_function_def'].includes(n.type)) {
+      const name = field(n, 'name')?.text;
+      if (name) definitions.set(name, [...(definitions.get(name) ?? []), n]);
+    }
+    if (n.type === 'preproc_call' && /^#\s*undef\b/.test(n.text)) {
+      const name = n.text.match(/^#\s*undef\s+([A-Za-z_]\w*)/); if (name) invalidated.add(name[1]);
+    }
+  });
+  const constantsBefore = (fn: SyntaxNode) => {
+    const result = new Map<string, number>();
+    for (const [name, entries] of definitions) {
+      const d = entries[0];
+      if (entries.length !== 1 || invalidated.has(name) || d.type !== 'preproc_def' || d.parent?.type !== 'translation_unit' || d.endIndex > fn.startIndex) continue;
+      let value = (field(d, 'value')?.text ?? '').replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '').trim();
+      while (value.startsWith('(') && value.endsWith(')')) value = value.slice(1, -1).trim();
+      // No expression evaluation, suffix/type inference, octal ambiguity, or macro recursion.
+      if (!/^(?:0|[1-9][0-9]*)$/.test(value)) continue;
+      const numeric = Number(value);
+      if (Number.isSafeInteger(numeric) && numeric <= 2147483647) result.set(name, numeric);
+    }
+    return result;
+  };
   for (const n of children(root)) {
     if (n.type === 'function_definition') {
       const name = functionName(n), body = field(n, 'body');
-      if (body) pages.push(new Builder(name, diagnostics, functions, macros, headers, span(body)).build(body));
+      if (body) pages.push(new Builder(name, diagnostics, functions, macros, headers, span(body), constantsBefore(n)).build(body));
     } else if (!['comment', 'preproc_include', 'preproc_def', 'preproc_function_def', 'declaration', 'type_definition', 'struct_specifier', 'enum_specifier'].includes(n.type)) {
       const builder = new Builder('未解決の領域', diagnostics, functions, macros, headers, WIDTH);
       const start = builder.add('terminal', '開始', 120, 40);
